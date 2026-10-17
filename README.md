@@ -4,36 +4,88 @@
 
 **Межі:** лише процеси вашого користувача; без мережевого читу, без приховування процесу, без обходу античиту. Запис у пам'ять — через `process_vm_readv` / `process_vm_writev`.
 
-## Збірка
+## Збірка і встановлення
+
+Мова — C++20. Інтерфейс — Qt Widgets. Ядро (`gamex_core`) від Qt не залежить.
+
+### Залежності
 
 ```bash
 sudo apt install g++ cmake ninja-build
-cmake -S . -B build -G Ninja
-cmake --build build
-./build/gamex_core_tests
-./build/gamex
+# системний Qt (один із варіантів):
+sudo apt install qt6-base-dev
+# опційно — мнемоніка в «Хто пише…»:
+sudo apt install libcapstone-dev
 ```
 
-## Встановлення в систему
+Повідомлення cmake `Capstone not found` — не помилка: без Capstone збірка йде нормально, лише без тексту інструкцій у watchpoint.
 
-Після збірки (потрібні права на запис у `/usr/local`):
+### Збірка проти системного Qt
 
 ```bash
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+./build/gamex_core_tests   # має надрукувати ok
+./build/gamex              # запуск без встановлення
+```
+
+### Збірка проти Qt з інсталера (~/Qt/…)
+
+Якщо використовуєте offline-набір (наприклад 6.12), **обов’язково** вкажіть префікс — інакше після install підхопиться системний Qt іншої версії (`version Qt_6.12 not found`):
+
+```bash
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_INSTALL_PREFIX="$HOME/.local" \
+  -DGAMEX_QT_ROOT="$HOME/Qt/6.12.0/gcc_64"
+cmake --build build
+cmake --install build
+```
+
+У бінарник вшивається `RUNPATH` на `$GAMEX_QT_ROOT/lib`, тож окремий `LD_LIBRARY_PATH` не потрібен.
+
+Тимчасовий обхід, якщо вже встановили без RPATH:
+
+```bash
+LD_LIBRARY_PATH="$HOME/Qt/6.12.0/gcc_64/lib" gamex
+```
+
+### Встановлення
+
+У домашній каталог (без root; переконайтесь, що `$HOME/.local/bin` у `PATH`):
+
+```bash
+cmake -S . -B build -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_INSTALL_PREFIX="$HOME/.local"
+# за потреби додайте -DGAMEX_QT_ROOT=...
+cmake --build build
+cmake --install build
+gamex
+```
+
+У `/usr/local` (потрібен sudo):
+
+```bash
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build
 sudo cmake --install build
 ```
 
-Або в домашній каталог без root:
+Встановлюється: `bin/gamex`, ярлик `share/applications/gamex.desktop`, іконки `share/icons/hicolor/…`, документація `share/doc/gamex/` (`LICENSE`, `NOTICE`, `README.md`).
+
+### Видалення
+
+З `$HOME/.local`:
 
 ```bash
-cmake -S . -B build -G Ninja -DCMAKE_INSTALL_PREFIX="$HOME/.local"
-cmake --build build
-cmake --install build
-# додайте ~/.local/bin у PATH, якщо ще немає
+rm -f "$HOME/.local/bin/gamex" \
+  "$HOME/.local/share/applications/gamex.desktop" \
+  "$HOME/.local/share/icons/hicolor/"*/apps/gamex.png \
+  "$HOME/.local/share/icons/hicolor/scalable/apps/gamex.svg"
+rm -rf "$HOME/.local/share/doc/gamex"
 ```
 
-Встановлюється: `gamex` у `bin`, ярлик у меню застосунків (`share/applications`), іконка, `LICENSE` / `NOTICE` / `README` у `share/doc/gamex`.
-
-Прибрати (якщо ставили в `/usr/local`):
+З `/usr/local`:
 
 ```bash
 sudo rm -f /usr/local/bin/gamex \
@@ -41,22 +93,7 @@ sudo rm -f /usr/local/bin/gamex \
   /usr/local/share/icons/hicolor/*/apps/gamex.png \
   /usr/local/share/icons/hicolor/scalable/apps/gamex.svg
 sudo rm -rf /usr/local/share/doc/gamex
-# оновити кеш іконок (за наявності):
-# sudo gtk-update-icon-cache /usr/local/share/icons/hicolor
 ```
-
-За замовчуванням шукається **системний** Qt 6 (потім Qt 5). Якщо Qt з інсталера в домашньому каталозі:
-
-```bash
-cmake -S . -B build -G Ninja -DGAMEX_QT_ROOT="$HOME/Qt/6.12.0/gcc_64"
-# або:
-# export CMAKE_PREFIX_PATH="$HOME/Qt/6.12.0/gcc_64"
-# cmake -S . -B build -G Ninja
-```
-
-Опційно: `libcapstone-dev` — тоді в діалозі «Хто пише» з’являється мнемоніка інструкції.
-
-Мова — C++20. Інтерфейс — Qt Widgets. Ядро (`gamex_core`) від Qt не залежить.
 
 ## Доступ до пам'яті
 

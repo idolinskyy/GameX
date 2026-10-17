@@ -105,6 +105,16 @@ if(GAMEX_BUILD_UI)
         target_link_libraries(gamex PRIVATE gamex_core ${GAMEX_QT_LIB})
         target_compile_options(gamex PRIVATE -Wall -Wextra -Wpedantic)
 
+        # Якщо збираємо проти offline-Qt (не системного), вшиваємо шлях до .so,
+        # інакше після install підхопиться старіший /lib/.../libQt6Core і буде
+        # «version Qt_6.xx not found».
+        if(GAMEX_QT_ROOT AND EXISTS "${GAMEX_QT_ROOT}/lib")
+            set_target_properties(gamex PROPERTIES
+                BUILD_RPATH "${GAMEX_QT_ROOT}/lib"
+                INSTALL_RPATH "${GAMEX_QT_ROOT}/lib"
+                INSTALL_RPATH_USE_LINK_PATH TRUE)
+        endif()
+
         include(GNUInstallDirs)
         configure_file(
             "${CMAKE_CURRENT_SOURCE_DIR}/data/gamex.desktop.in"

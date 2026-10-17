@@ -28,6 +28,12 @@ bool is_ret_opcode(std::byte op) {
   return v == 0xc3 || v == 0xc2 || v == 0xcb || v == 0xca;
 }
 
+// g++ не дозволяє offsetof(user, u_debugreg[i]) зі змінним індексом.
+std::size_t debugreg_user_offset(int index) {
+  return offsetof(user, u_debugreg) +
+         static_cast<std::size_t>(index) * sizeof(unsigned long);
+}
+
 } // namespace
 
 WatchSession::~WatchSession() { detach(); }
@@ -148,7 +154,7 @@ bool WatchSession::apply_debug_regs(pid_t tid, std::string *error) {
   for (int i = 0; i < kMaxHardwareWatches; ++i) {
     const unsigned long addr = slots_[i].used ? slots_[i].address : 0;
     if (::ptrace(PTRACE_POKEUSER, tid,
-                 reinterpret_cast<void *>(offsetof(user, u_debugreg[i])),
+                 reinterpret_cast<void *>(debugreg_user_offset(i)),
                  reinterpret_cast<void *>(addr)) != 0) {
       if (error) {
         *error = errno_message("ptrace(POKEUSER DR)");
@@ -157,7 +163,7 @@ bool WatchSession::apply_debug_regs(pid_t tid, std::string *error) {
     }
   }
   if (::ptrace(PTRACE_POKEUSER, tid,
-               reinterpret_cast<void *>(offsetof(user, u_debugreg[6])),
+               reinterpret_cast<void *>(debugreg_user_offset(6)),
                reinterpret_cast<void *>(0)) != 0) {
     if (error) {
       *error = errno_message("ptrace(POKEUSER DR6)");
@@ -166,7 +172,7 @@ bool WatchSession::apply_debug_regs(pid_t tid, std::string *error) {
   }
   const unsigned long dr7 = build_dr7();
   if (::ptrace(PTRACE_POKEUSER, tid,
-               reinterpret_cast<void *>(offsetof(user, u_debugreg[7])),
+               reinterpret_cast<void *>(debugreg_user_offset(7)),
                reinterpret_cast<void *>(dr7)) != 0) {
     if (error) {
       *error = errno_message("ptrace(POKEUSER DR7)");
@@ -241,7 +247,7 @@ bool WatchSession::resume(std::string *error) {
   for (pid_t tid : tids_) {
     // Скидаємо DR6, щоб не зациклитись на старому хіті.
     ::ptrace(PTRACE_POKEUSER, tid,
-             reinterpret_cast<void *>(offsetof(user, u_debugreg[6])),
+             reinterpret_cast<void *>(debugreg_user_offset(6)),
              reinterpret_cast<void *>(0));
     if (::ptrace(PTRACE_CONT, tid, nullptr, nullptr) != 0) {
       if (error) {
@@ -328,9 +334,9 @@ std::string WatchSession::disassemble(std::uintptr_t address,
 std::optional<WatchHit> WatchSession::capture_hit(pid_t tid,
                                                   std::string *error) {
   errno = 0;
-  const long dr6 = ::ptrace(
-      PTRACE_PEEKUSER, tid,
-      reinterpret_cast<void *>(offsetof(user, u_debugreg[6])), nullptr);
+  const long dr6 =
+      ::ptrace(PTRACE_PEEKUSER, tid,
+               reinterpret_cast<void *>(debugreg_user_offset(6)), nullptr);
   if (errno != 0) {
     if (error) {
       *error = errno_message("ptrace(PEEKUSER DR6)");
