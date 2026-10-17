@@ -1,0 +1,6 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+  <qresource prefix="/">
+    <file alias="icons/gamex.png">../data/icons/hicolor/256x256/apps/gamex.png</file>
+  </qresource>
+</RCC>

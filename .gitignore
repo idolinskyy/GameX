@@ -1,0 +1,16 @@
+build/
+cmake-build-*/
+out/
+.cache/
+/compile_commands.json
+compile_commands.json
+CMakeUserPresets.json
+*.user
+.qtcreator/
+*.autosave
+*.o
+*.a
+*.so
+*.gxt
+.vscode/
+.idea/

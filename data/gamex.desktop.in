@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=GameX
+GenericName=Memory editor
+GenericName[uk]=Редактор пам'яті
+Comment=Edit values in local game processes on Linux
+Comment[uk]=Редактор параметрів локальних ігор на Linux
+Exec=gamex
+Icon=gamex
+Terminal=false
+Categories=Utility;Game;
+Keywords=memory;scan;game;freeze;ptrace;
+Keywords[uk]=пам'ять;пошук;гра;заморозка;
+StartupNotify=true
+StartupWMClass=gamex
