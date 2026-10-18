@@ -18,6 +18,7 @@
 #include <mutex>
 #include <optional>
 
+class QAction;
 class QCheckBox;
 class QComboBox;
 class QLabel;
@@ -89,6 +90,9 @@ private:
   void apply_group_filter();
   void update_value_fields();
   void update_dump_indicators();
+  void update_scan_controls();
+  bool scan_session_active() const;
+  bool can_refine_scan() const;
   void write_status(const QString &text);
   void toggle_freeze_selected();
   void set_value_selected();
@@ -136,6 +140,11 @@ private:
   QPushButton *scan_button_ = nullptr;
   QPushButton *refine_button_ = nullptr;
   QPushButton *stop_button_ = nullptr;
+  QPushButton *reset_button_ = nullptr;
+  QAction *scan_action_ = nullptr;
+  QAction *refine_action_ = nullptr;
+  QAction *reset_action_ = nullptr;
+  QAction *stop_action_ = nullptr;
   std::array<QPushButton *, kDumpSlots> dump_buttons_{};
   QProgressBar *progress_ = nullptr;
   QTableWidget *results_ = nullptr;
@@ -162,6 +171,8 @@ private:
   bool updating_ = false;
   bool scanning_ = false;
   bool ignore_child_errors_ = false;
+  // Є активна сесія пошуку (збіги / знімок / структура) — до «Скинути».
+  bool scan_session_ = false;
 };
 
 } // namespace gamex

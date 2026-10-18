@@ -178,9 +178,10 @@ void MainWindow::build_ui() {
       "Залишити лише адреси, які відповідають новій умові");
   stop_button_ = new QPushButton("Стоп", this);
   stop_button_->setEnabled(false);
-  auto *reset_button = new QPushButton("Скинути пошук", this);
-  reset_button->setToolTip(
-      "Очистити список збігів і знімок. Нижня таблиця адрес лишається.");
+  reset_button_ = new QPushButton("Скинути пошук", this);
+  reset_button_->setToolTip(
+      "Очистити список збігів і знімок, щоб знову натиснути «Шукати». "
+      "Нижня таблиця адрес лишається.");
 
   progress_ = new QProgressBar(this);
   progress_->setTextVisible(true);
@@ -235,7 +236,7 @@ void MainWindow::build_ui() {
   actions->addWidget(scan_button_);
   actions->addWidget(refine_button_);
   actions->addWidget(stop_button_);
-  actions->addWidget(reset_button);
+  actions->addWidget(reset_button_);
   actions->addStretch();
   search_grid->addLayout(actions, 2, 0, 1, 8);
   search_grid->setColumnStretch(1, 1);
@@ -388,7 +389,7 @@ void MainWindow::build_ui() {
   connect(refine_button_, &QPushButton::clicked, this,
           [this] { run_scan(true); });
   connect(stop_button_, &QPushButton::clicked, this, &MainWindow::stop_scan);
-  connect(reset_button, &QPushButton::clicked, this, &MainWindow::reset_scan);
+  connect(reset_button_, &QPushButton::clicked, this, &MainWindow::reset_scan);
   connect(add_button, &QPushButton::clicked, this,
           &MainWindow::add_selected_hit);
   connect(remove_button, &QPushButton::clicked, this,
@@ -432,6 +433,7 @@ void MainWindow::build_ui() {
           [this](const QString &) { apply_group_filter(); });
   update_value_fields();
   update_dump_indicators();
+  update_scan_controls();
 }
 
 void MainWindow::build_menus() {
@@ -465,14 +467,15 @@ void MainWindow::build_menus() {
           &MainWindow::disconnect_process);
 
   auto *search_menu = menuBar()->addMenu("Пошук");
-  auto *scan_action = search_menu->addAction("Шукати");
-  connect(scan_action, &QAction::triggered, this, [this] { run_scan(false); });
-  auto *refine_action = search_menu->addAction("Відсіяти");
-  connect(refine_action, &QAction::triggered, this, [this] { run_scan(true); });
-  auto *stop_action = search_menu->addAction("Стоп");
-  connect(stop_action, &QAction::triggered, this, &MainWindow::stop_scan);
-  auto *reset_action = search_menu->addAction("Скинути пошук");
-  connect(reset_action, &QAction::triggered, this, &MainWindow::reset_scan);
+  scan_action_ = search_menu->addAction("Шукати");
+  connect(scan_action_, &QAction::triggered, this, [this] { run_scan(false); });
+  refine_action_ = search_menu->addAction("Відсіяти");
+  connect(refine_action_, &QAction::triggered, this,
+          [this] { run_scan(true); });
+  stop_action_ = search_menu->addAction("Стоп");
+  connect(stop_action_, &QAction::triggered, this, &MainWindow::stop_scan);
+  reset_action_ = search_menu->addAction("Скинути пошук");
+  connect(reset_action_, &QAction::triggered, this, &MainWindow::reset_scan);
   search_menu->addSeparator();
   for (int i = 0; i < kDumpSlots; ++i) {
     auto *dump_action =
@@ -613,6 +616,7 @@ void MainWindow::attach_pid(pid_t pid, const QString &title) {
     return;
   }
   wait_for_scan_thread();
+  scan_session_ = false;
   scanner_.reset();
   memory_ = std::make_unique<ProcessMemory>(std::move(*opened));
   scanner_ = std::make_unique<Scanner>(*memory_);
@@ -637,6 +641,7 @@ void MainWindow::attach_pid(pid_t pid, const QString &title) {
                   .arg(static_cast<qulonglong>(failed));
   }
   statusBar()->showMessage(access);
+  update_scan_controls();
 }
 
 ScanQuery MainWindow::current_query(std::string *error) const {
@@ -732,6 +737,22 @@ void MainWindow::run_scan(bool refine) {
     QMessageBox::information(this, "GameX", "Спочатку оберіть процес");
     return;
   }
+  if (refine) {
+    if (!can_refine_scan()) {
+      QMessageBox::information(
+          this, "GameX",
+          last_structure_
+              ? "Після пошуку структури спочатку скиньте пошук."
+              : "Спочатку виконайте «Шукати», потім уточнюйте «Відсіяти».");
+      return;
+    }
+  } else if (scan_session_) {
+    QMessageBox::information(
+        this, "GameX",
+        "Уже є активний пошук. Натисніть «Скинути пошук», щоб почати знову, "
+        "або «Відсіяти», щоб звузити список.");
+    return;
+  }
   std::string error;
   ScanQuery query = current_query(&error);
   if (!error.empty()) {
@@ -753,8 +774,13 @@ void MainWindow::reset_scan() {
     scanner_->reset();
   }
   last_structure_.reset();
+  scan_session_ = false;
+  dumps_.clear();
+  update_dump_indicators();
   results_->setRowCount(0);
-  statusBar()->showMessage("Пошук скинуто");
+  results_->setHorizontalHeaderLabels({"Адреса", "Значення зараз"});
+  statusBar()->showMessage("Пошук скинуто — можна знову натиснути «Шукати»");
+  update_scan_controls();
 }
 
 QString MainWindow::format_hit_value(const ScanHit &hit) const {
@@ -1213,16 +1239,112 @@ void MainWindow::update_value_fields() {
       op != CompareOp::Unchanged;
   value_edit_->setEnabled(needs_value);
   value_label_->setEnabled(needs_value);
-  if (op == CompareOp::Unknown) {
-    value_edit_->setPlaceholderText("для знімка число не потрібне");
-  } else if (!needs_value) {
-    value_edit_->setPlaceholderText("для цієї умови число не потрібне");
+  const bool refining = can_refine_scan();
+  if (refining) {
+    value_label_->setText(needs_value ? "Нове значення" : "Умова відсіву");
+    if (op == CompareOp::Unknown) {
+      value_edit_->setPlaceholderText("знімок уже є — оберіть іншу умову");
+    } else if (!needs_value) {
+      value_edit_->setPlaceholderText(
+          "змініть значення в грі, потім «Відсіяти»");
+    } else {
+      value_edit_->setPlaceholderText("нове значення для відсіву");
+    }
   } else {
-    value_edit_->setPlaceholderText("100 · 100*10 · 64h · DE ?? AD");
+    value_label_->setText("Що шукати");
+    if (op == CompareOp::Unknown) {
+      value_edit_->setPlaceholderText("для першого знімка число не потрібне");
+    } else if (!needs_value) {
+      value_edit_->setPlaceholderText("для цієї умови число не потрібне");
+    } else {
+      value_edit_->setPlaceholderText("100 · 100*10 · 64h · DE ?? AD");
+    }
   }
   const bool between = op == CompareOp::Between;
   upper_edit_->setVisible(between);
   upper_label_->setVisible(between);
+}
+
+bool MainWindow::scan_session_active() const { return scan_session_; }
+
+bool MainWindow::can_refine_scan() const {
+  if (!scan_session_ || !scanner_ || !memory_ || last_structure_) {
+    return false;
+  }
+  return scanner_->hit_count() > 0 || scanner_->has_snapshot();
+}
+
+void MainWindow::update_scan_controls() {
+  const bool busy = scanning_;
+  const bool have_process = memory_ != nullptr;
+  const bool session = scan_session_active();
+  const bool refine_ok = can_refine_scan();
+
+  if (scan_button_ != nullptr) {
+    // Під час сесії «Шукати» вимкнено — спочатку скинути, щоб не зтерти збіги.
+    scan_button_->setEnabled(have_process && !busy && !session);
+    scan_button_->setText(session ? "Новий пошук" : "Шукати");
+    scan_button_->setToolTip(
+        session ? "Спочатку натисніть «Скинути пошук», щоб почати з нуля"
+                : "Перший прохід по пам'яті");
+  }
+  if (refine_button_ != nullptr) {
+    refine_button_->setEnabled(have_process && !busy && refine_ok);
+    refine_button_->setToolTip(
+        !have_process ? "Спочатку оберіть процес"
+        : last_structure_
+            ? "Після пошуку структури відсів числа недоступний — скиньте пошук"
+        : !session   ? "Спочатку виконайте «Шукати»"
+        : !refine_ok ? "Немає збігів або знімка для відсіву"
+                     : "Залишити лише адреси, що відповідають новій умові");
+  }
+  if (stop_button_ != nullptr) {
+    stop_button_->setEnabled(busy);
+  }
+  if (reset_button_ != nullptr) {
+    reset_button_->setEnabled(have_process && !busy && session);
+  }
+
+  if (scan_action_ != nullptr) {
+    scan_action_->setEnabled(have_process && !busy && !session);
+    scan_action_->setText(session ? "Новий пошук" : "Шукати");
+  }
+  if (refine_action_ != nullptr) {
+    refine_action_->setEnabled(have_process && !busy && refine_ok);
+  }
+  if (stop_action_ != nullptr) {
+    stop_action_->setEnabled(busy);
+  }
+  if (reset_action_ != nullptr) {
+    reset_action_->setEnabled(have_process && !busy && session);
+  }
+
+  // Тип/endian фіксуємо на час сесії — інакше показ і відсів роз'їдуться.
+  if (type_combo_ != nullptr) {
+    type_combo_->setEnabled(!busy && !session);
+  }
+  if (endian_combo_ != nullptr) {
+    endian_combo_->setEnabled(!busy && !session);
+  }
+
+  if (hits_hint_ != nullptr) {
+    if (refine_ok) {
+      hits_hint_->setText(
+          "Сесія пошуку активна: змініть умову / значення → «Відсіяти». "
+          "Або «Скинути пошук», щоб шукати знову з нуля. Подвійне клацання "
+          "або «Додати обране ↓» — у таблицю редагування.");
+    } else if (session && last_structure_) {
+      hits_hint_->setText(
+          "Знайдено бази структур. Додайте поля в таблицю або «Скинути "
+          "пошук» для звичайного пошуку числа.");
+    } else {
+      hits_hint_->setText(
+          "Знайдені адреси. Подвійне клацання або кнопка «Додати обране "
+          "↓» переносить їх у таблицю редагування.");
+    }
+  }
+
+  update_value_fields();
 }
 
 void MainWindow::write_status(const QString &text) {
@@ -1889,14 +2011,13 @@ void MainWindow::stop_scan() { cancel_.store(true); }
 
 void MainWindow::set_scanning(bool scanning) {
   scanning_ = scanning;
-  scan_button_->setEnabled(!scanning);
-  refine_button_->setEnabled(!scanning);
-  stop_button_->setEnabled(scanning);
+  update_scan_controls();
 }
 
 void MainWindow::detach_process(const QString &reason) {
   wait_for_scan_thread();
-  set_scanning(false);
+  scanning_ = false;
+  scan_session_ = false;
   scanner_.reset();
   memory_.reset();
   limit_region_ = false;
@@ -1909,6 +2030,7 @@ void MainWindow::detach_process(const QString &reason) {
   region_label_->setText("Область: увесь процес");
   results_->setRowCount(0);
   statusBar()->showMessage(reason);
+  update_scan_controls();
 }
 
 void MainWindow::on_scan_progress(qulonglong scanned, qulonglong total) {
@@ -1932,20 +2054,33 @@ void MainWindow::on_scan_completed() {
     std::lock_guard lock(status_mutex_);
     status = last_status_;
   }
-  set_scanning(false);
+  scanning_ = false;
   progress_->setRange(0, 1000);
   progress_->setValue(status.cancelled ? progress_->value() : 1000);
   if (!status.ok) {
+    // Невдалий перший прохід / структура — не лишаємо «завислі» шаблони.
+    if (!scan_session_) {
+      last_structure_.reset();
+    }
     progress_->setFormat("Помилка");
     statusBar()->showMessage(QString::fromStdString(status.message));
     QMessageBox::warning(this, "GameX", QString::fromStdString(status.message));
+    update_scan_controls();
     return;
+  }
+  const bool useful = status.hit_count > 0 || status.snapshot ||
+                      (last_structure_ && status.hit_count > 0);
+  // Знімок unknown без хітів теж відкриває сесію (далі лише «Відсіяти»).
+  if (useful || status.snapshot) {
+    scan_session_ = true;
+  } else if (last_structure_) {
+    last_structure_.reset();
   }
   show_hits();
   QString message;
   if (status.snapshot && status.hit_count == 0) {
     message =
-        QString("Знімок %1 МБ. Змініть значення в грі і натисніть Відсіяти.")
+        QString("Знімок %1 МБ. Змініть значення в грі і натисніть «Відсіяти».")
             .arg(static_cast<double>(status.scanned) / (1024.0 * 1024.0), 0,
                  'f', 1);
   } else if (last_structure_) {
@@ -1957,6 +2092,9 @@ void MainWindow::on_scan_completed() {
         QString("Знайдено %1").arg(static_cast<qulonglong>(status.hit_count));
     if (scanner_ && scanner_->hit_count() > 5000) {
       message += QString(" (показано перші %1)").arg(5000);
+    }
+    if (status.hit_count > 0) {
+      message += " · далі «Відсіяти» або «Скинути пошук»";
     }
   }
   if (status.cancelled) {
@@ -1970,6 +2108,7 @@ void MainWindow::on_scan_completed() {
   }
   progress_->setFormat(message);
   statusBar()->showMessage(message);
+  update_scan_controls();
 }
 
 } // namespace gamex
