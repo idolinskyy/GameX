@@ -2,26 +2,63 @@
 
 #include "core/process_memory.hpp"
 
+#include <QCheckBox>
 #include <QDialogButtonBox>
 #include <QHeaderView>
+#include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
 #include <QTableWidget>
 #include <QVBoxLayout>
 
+#include <unistd.h>
+
 namespace gamex {
 
 ProcessDialog::ProcessDialog(QWidget *parent) : QDialog(parent) {
   setWindowTitle("Процеси");
-  resize(820, 520);
+  resize(960, 540);
 
   filter_ = new QLineEdit(this);
-  filter_->setPlaceholderText("Пошук за pid, ім'ям або командою");
+  filter_->setPlaceholderText("Пошук за pid, користувачем, ім'ям або командою");
   filter_->setClearButtonEnabled(true);
 
+  login_users_only_ =
+      new QCheckBox(QString("Лише користувачі входу (UID ≥ %1)")
+                        .arg(static_cast<qulonglong>(login_uid_min())),
+                    this);
+  login_users_only_->setChecked(true);
+  login_users_only_->setToolTip(
+      "Без системних служб (daemon/root з низьким UID). Поріг з "
+      "/etc/login.defs (UID_MIN).");
+
+  my_uid_only_ = new QCheckBox("Лише мій користувач (поточний UID)", this);
+  my_uid_only_->setChecked(::geteuid() != 0);
+  my_uid_only_->setToolTip(
+      "Залишити лише процеси вашого uid. Найбільше зменшує список. "
+      "Під root за замовчуванням вимкнено — інакше майже нічого не видно.");
+
+  panel_only_ =
+      new QCheckBox("Лише з панелі оболонки (запущені програми)", this);
+  panel_only_->setChecked(true);
+  panel_only_->setToolTip(
+      "Процеси вікон, які показує панель задач (EWMH _NET_CLIENT_LIST, "
+      "без SKIP_TASKBAR / desktop / dock). Потрібен X11 або XWayland "
+      "(змінна DISPLAY). Чистий Wayland без XWayland — список може бути "
+      "порожнім.");
+
+  auto *note = new QLabel(
+      "На сучасних Linux у /proc уже лише головні процеси: окремі потоки "
+      "(TID) там не дублюються. «Потоки» — скільки тредів усередині. "
+      "Панель — вікна з taskbar оболонки, не повний список /proc.",
+      this);
+  note->setWordWrap(true);
+  note->setStyleSheet("color: #888;");
+
   table_ = new QTableWidget(this);
-  table_->setColumnCount(3);
-  table_->setHorizontalHeaderLabels({"PID", "Ім'я", "Командний рядок"});
+  table_->setColumnCount(5);
+  table_->setHorizontalHeaderLabels(
+      {"PID", "Користувач", "Потоки", "Ім'я", "Командний рядок"});
   table_->setSelectionBehavior(QAbstractItemView::SelectRows);
   table_->setSelectionMode(QAbstractItemView::SingleSelection);
   table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -29,6 +66,10 @@ ProcessDialog::ProcessDialog(QWidget *parent) : QDialog(parent) {
   table_->horizontalHeader()->setStretchLastSection(true);
   table_->horizontalHeader()->setSectionResizeMode(
       1, QHeaderView::ResizeToContents);
+  table_->horizontalHeader()->setSectionResizeMode(
+      2, QHeaderView::ResizeToContents);
+  table_->horizontalHeader()->setSectionResizeMode(
+      3, QHeaderView::ResizeToContents);
 
   auto *buttons = new QDialogButtonBox(
       QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
@@ -43,9 +84,19 @@ ProcessDialog::ProcessDialog(QWidget *parent) : QDialog(parent) {
           [this](const QString &) { apply_filter(); });
   connect(filter_, &QLineEdit::returnPressed, this,
           &ProcessDialog::accept_selection);
+  connect(login_users_only_, &QCheckBox::toggled, this,
+          [this](bool) { apply_filter(); });
+  connect(my_uid_only_, &QCheckBox::toggled, this,
+          [this](bool) { apply_filter(); });
+  connect(panel_only_, &QCheckBox::toggled, this,
+          [this](bool) { apply_filter(); });
 
   auto *layout = new QVBoxLayout(this);
   layout->addWidget(filter_);
+  layout->addWidget(login_users_only_);
+  layout->addWidget(my_uid_only_);
+  layout->addWidget(panel_only_);
+  layout->addWidget(note);
   layout->addWidget(table_);
   layout->addWidget(buttons);
   reload();
@@ -54,18 +105,41 @@ ProcessDialog::ProcessDialog(QWidget *parent) : QDialog(parent) {
 
 void ProcessDialog::reload() {
   processes_ = list_processes();
+  panel_pids_.clear();
+  for (pid_t pid : list_shell_panel_pids()) {
+    if (pid > 0) {
+      panel_pids_.insert(pid);
+    }
+  }
   apply_filter();
 }
 
 void ProcessDialog::apply_filter() {
   const QString needle = filter_->text().trimmed();
+  const bool login_only =
+      login_users_only_ != nullptr && login_users_only_->isChecked();
+  const bool mine_only = my_uid_only_ != nullptr && my_uid_only_->isChecked();
+  const bool panel_only = panel_only_ != nullptr && panel_only_->isChecked();
+  const uid_t self = ::geteuid();
   table_->setRowCount(0);
   int row = 0;
   for (const ProcessInfo &info : processes_) {
+    if (login_only && !is_login_user_uid(info.uid)) {
+      continue;
+    }
+    if (mine_only && info.uid != self) {
+      continue;
+    }
+    if (panel_only && !panel_pids_.contains(info.pid)) {
+      continue;
+    }
     const QString pid = QString::number(info.pid);
+    const QString user = QString::fromStdString(info.user);
+    const QString threads = QString::number(info.thread_count);
     const QString name = QString::fromStdString(info.name);
     const QString command = QString::fromStdString(info.command_line);
     const bool match = needle.isEmpty() || pid.contains(needle) ||
+                       user.contains(needle, Qt::CaseInsensitive) ||
                        name.contains(needle, Qt::CaseInsensitive) ||
                        command.contains(needle, Qt::CaseInsensitive);
     if (!match) {
@@ -75,8 +149,12 @@ void ProcessDialog::apply_filter() {
     auto *pid_item = new QTableWidgetItem(pid);
     pid_item->setData(Qt::UserRole, static_cast<qlonglong>(info.pid));
     table_->setItem(row, 0, pid_item);
-    table_->setItem(row, 1, new QTableWidgetItem(name));
-    table_->setItem(row, 2, new QTableWidgetItem(command));
+    table_->setItem(row, 1, new QTableWidgetItem(user));
+    auto *thr = new QTableWidgetItem(threads);
+    thr->setTextAlignment(Qt::AlignCenter);
+    table_->setItem(row, 2, thr);
+    table_->setItem(row, 3, new QTableWidgetItem(name));
+    table_->setItem(row, 4, new QTableWidgetItem(command));
     ++row;
   }
   if (table_->rowCount() > 0) {

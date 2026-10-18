@@ -5,12 +5,20 @@
 #include <charconv>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <sstream>
+#include <string_view>
 
 #include <errno.h>
 #include <fcntl.h>
+#include <pwd.h>
 #include <sys/uio.h>
 #include <unistd.h>
+
+#if defined(GAMEX_HAS_X11)
+#include <X11/Xatom.h>
+#include <X11/Xlib.h>
+#endif
 
 namespace gamex {
 namespace {
@@ -51,7 +59,234 @@ std::string comm_of(pid_t pid) {
   return trim_copy(read_file("/proc/" + std::to_string(pid) + "/comm"));
 }
 
+std::optional<unsigned long> status_field_u64(const std::string &raw,
+                                              std::string_view key) {
+  const auto pos = raw.find(key);
+  if (pos == std::string::npos) {
+    return std::nullopt;
+  }
+  std::size_t cursor = pos + key.size();
+  while (cursor < raw.size() && (raw[cursor] == ' ' || raw[cursor] == '\t')) {
+    ++cursor;
+  }
+  unsigned long value = 0;
+  const auto parsed = std::from_chars(
+      raw.data() + static_cast<std::ptrdiff_t>(cursor),
+      raw.data() + static_cast<std::ptrdiff_t>(raw.size()), value);
+  if (parsed.ec != std::errc{}) {
+    return std::nullopt;
+  }
+  return value;
+}
+
+struct StatusIds {
+  uid_t uid = static_cast<uid_t>(-1);
+  pid_t tgid = -1;
+};
+
+StatusIds ids_from_status(pid_t pid) {
+  StatusIds ids;
+  const std::string raw = read_file("/proc/" + std::to_string(pid) + "/status");
+  if (raw.empty()) {
+    return ids;
+  }
+  // Uid:\treal\teffective\tsaved\tfs
+  if (const auto uid = status_field_u64(raw, "Uid:")) {
+    ids.uid = static_cast<uid_t>(*uid);
+  }
+  // Tgid: — id групи потоків (= pid лідера процесу).
+  if (const auto tgid = status_field_u64(raw, "Tgid:")) {
+    ids.tgid = static_cast<pid_t>(*tgid);
+  } else {
+    ids.tgid = pid;
+  }
+  return ids;
+}
+
 } // namespace
+
+int process_thread_count(pid_t pid) {
+  int count = 0;
+  std::error_code error;
+  const auto path =
+      std::filesystem::path("/proc") / std::to_string(pid) / "task";
+  for (const auto &entry : std::filesystem::directory_iterator(path, error)) {
+    if (error) {
+      break;
+    }
+    const std::string name = entry.path().filename().string();
+    if (!name.empty() &&
+        std::all_of(name.begin(), name.end(),
+                    [](unsigned char ch) { return std::isdigit(ch) != 0; })) {
+      ++count;
+    }
+  }
+  return count > 0 ? count : 1;
+}
+
+std::vector<pid_t> list_shell_panel_pids() {
+  std::vector<pid_t> result;
+#if defined(GAMEX_HAS_X11)
+  Display *display = ::XOpenDisplay(nullptr);
+  if (display == nullptr) {
+    return result;
+  }
+
+  const Window root = DefaultRootWindow(display);
+  const Atom net_client_list =
+      ::XInternAtom(display, "_NET_CLIENT_LIST", False);
+  const Atom net_wm_pid = ::XInternAtom(display, "_NET_WM_PID", False);
+  const Atom net_wm_state = ::XInternAtom(display, "_NET_WM_STATE", False);
+  const Atom skip_taskbar =
+      ::XInternAtom(display, "_NET_WM_STATE_SKIP_TASKBAR", False);
+  const Atom net_wm_window_type =
+      ::XInternAtom(display, "_NET_WM_WINDOW_TYPE", False);
+  const Atom exclude_types[] = {
+      ::XInternAtom(display, "_NET_WM_WINDOW_TYPE_DESKTOP", False),
+      ::XInternAtom(display, "_NET_WM_WINDOW_TYPE_DOCK", False),
+      ::XInternAtom(display, "_NET_WM_WINDOW_TYPE_TOOLBAR", False),
+      ::XInternAtom(display, "_NET_WM_WINDOW_TYPE_MENU", False),
+      ::XInternAtom(display, "_NET_WM_WINDOW_TYPE_DROPDOWN_MENU", False),
+      ::XInternAtom(display, "_NET_WM_WINDOW_TYPE_POPUP_MENU", False),
+      ::XInternAtom(display, "_NET_WM_WINDOW_TYPE_TOOLTIP", False),
+      ::XInternAtom(display, "_NET_WM_WINDOW_TYPE_NOTIFICATION", False),
+      ::XInternAtom(display, "_NET_WM_WINDOW_TYPE_COMBO", False),
+      ::XInternAtom(display, "_NET_WM_WINDOW_TYPE_DND", False),
+      ::XInternAtom(display, "_NET_WM_WINDOW_TYPE_SPLASH", False),
+  };
+
+  auto read_atom_list = [&](Window window, Atom property) -> std::vector<Atom> {
+    Atom actual_type = None;
+    int actual_format = 0;
+    unsigned long nitems = 0;
+    unsigned long bytes_after = 0;
+    unsigned char *data = nullptr;
+    std::vector<Atom> atoms;
+    if (::XGetWindowProperty(display, window, property, 0, 1024, False, XA_ATOM,
+                             &actual_type, &actual_format, &nitems,
+                             &bytes_after, &data) != Success ||
+        data == nullptr) {
+      return atoms;
+    }
+    if (actual_format == 32 && nitems > 0) {
+      const auto *values = reinterpret_cast<const Atom *>(data);
+      atoms.assign(values, values + nitems);
+    }
+    ::XFree(data);
+    return atoms;
+  };
+
+  Atom actual_type = None;
+  int actual_format = 0;
+  unsigned long nitems = 0;
+  unsigned long bytes_after = 0;
+  unsigned char *data = nullptr;
+  if (::XGetWindowProperty(display, root, net_client_list, 0, 4096, False,
+                           XA_WINDOW, &actual_type, &actual_format, &nitems,
+                           &bytes_after, &data) != Success ||
+      data == nullptr) {
+    ::XCloseDisplay(display);
+    return result;
+  }
+  if (actual_format != 32 || nitems == 0) {
+    ::XFree(data);
+    ::XCloseDisplay(display);
+    return result;
+  }
+
+  const auto *windows = reinterpret_cast<const Window *>(data);
+  for (unsigned long i = 0; i < nitems; ++i) {
+    const Window window = windows[i];
+    const std::vector<Atom> states = read_atom_list(window, net_wm_state);
+    if (std::find(states.begin(), states.end(), skip_taskbar) != states.end()) {
+      continue;
+    }
+    const std::vector<Atom> types = read_atom_list(window, net_wm_window_type);
+    bool excluded = false;
+    for (Atom type : types) {
+      if (std::find(std::begin(exclude_types), std::end(exclude_types), type) !=
+          std::end(exclude_types)) {
+        excluded = true;
+        break;
+      }
+    }
+    if (excluded) {
+      continue;
+    }
+
+    Atom pid_type = None;
+    int pid_format = 0;
+    unsigned long pid_nitems = 0;
+    unsigned long pid_bytes_after = 0;
+    unsigned char *pid_data = nullptr;
+    if (::XGetWindowProperty(display, window, net_wm_pid, 0, 1, False,
+                             XA_CARDINAL, &pid_type, &pid_format, &pid_nitems,
+                             &pid_bytes_after, &pid_data) != Success ||
+        pid_data == nullptr) {
+      continue;
+    }
+    if (pid_format == 32 && pid_nitems > 0) {
+      const auto pid = static_cast<pid_t>(
+          *reinterpret_cast<const unsigned long *>(pid_data));
+      if (pid > 0 &&
+          std::find(result.begin(), result.end(), pid) == result.end()) {
+        result.push_back(pid);
+      }
+    }
+    ::XFree(pid_data);
+  }
+
+  ::XFree(data);
+  ::XCloseDisplay(display);
+#endif
+  return result;
+}
+
+std::optional<uid_t> process_uid(pid_t pid) {
+  const auto ids = ids_from_status(pid);
+  if (ids.uid == static_cast<uid_t>(-1)) {
+    return std::nullopt;
+  }
+  return ids.uid;
+}
+
+std::string username_of(uid_t uid) {
+  if (passwd *pw = ::getpwuid(uid)) {
+    if (pw->pw_name != nullptr && pw->pw_name[0] != '\0') {
+      return pw->pw_name;
+    }
+  }
+  return std::to_string(uid);
+}
+
+uid_t login_uid_min() {
+  static const uid_t kMin = [] {
+    std::ifstream input("/etc/login.defs");
+    std::string line;
+    while (std::getline(input, line)) {
+      const auto hash = line.find('#');
+      if (hash != std::string::npos) {
+        line.resize(hash);
+      }
+      std::istringstream stream(line);
+      std::string key;
+      unsigned long value = 0;
+      if (stream >> key >> value && key == "UID_MIN") {
+        return static_cast<uid_t>(value);
+      }
+    }
+    return static_cast<uid_t>(1000);
+  }();
+  return kMin;
+}
+
+bool is_login_user_uid(uid_t uid) {
+  // uid_t(-1) = «невідомий» після невдалого читання /proc/…/status.
+  if (uid == static_cast<uid_t>(-1)) {
+    return false;
+  }
+  return uid >= login_uid_min();
+}
 
 std::optional<unsigned long long> process_starttime(pid_t pid) {
   if (pid <= 0) {
@@ -301,6 +536,13 @@ std::vector<ProcessInfo> list_processes() {
     }
     ProcessInfo info;
     info.pid = pid;
+    const StatusIds ids = ids_from_status(pid);
+    info.uid = ids.uid;
+    info.tgid = ids.tgid > 0 ? ids.tgid : pid;
+    if (info.uid != static_cast<uid_t>(-1)) {
+      info.user = username_of(info.uid);
+    }
+    info.thread_count = process_thread_count(pid);
     info.command_line = command_line_of(pid);
     info.name = comm_of(pid);
     if (info.name.empty()) {
@@ -310,6 +552,9 @@ std::vector<ProcessInfo> list_processes() {
   }
   std::ranges::sort(processes,
                     [](const ProcessInfo &left, const ProcessInfo &right) {
+                      if (left.user != right.user) {
+                        return left.user < right.user;
+                      }
                       if (left.name != right.name) {
                         return left.name < right.name;
                       }

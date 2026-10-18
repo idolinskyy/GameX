@@ -3,8 +3,10 @@
 #include <QDialog>
 
 #include <sys/types.h>
+#include <unordered_set>
 #include <vector>
 
+class QCheckBox;
 class QLineEdit;
 class QTableWidget;
 
@@ -26,8 +28,12 @@ private:
   void accept_selection();
 
   QLineEdit *filter_ = nullptr;
+  QCheckBox *login_users_only_ = nullptr;
+  QCheckBox *my_uid_only_ = nullptr;
+  QCheckBox *panel_only_ = nullptr;
   QTableWidget *table_ = nullptr;
   std::vector<ProcessInfo> processes_;
+  std::unordered_set<pid_t> panel_pids_;
   pid_t selected_pid_ = -1;
 };
 
