@@ -974,6 +974,12 @@ void test_process_starttime() {
   expect(start.has_value() && *start > 0, "self starttime readable");
   auto opened = gamex::ProcessMemory::open(::getpid(), nullptr);
   expect(opened && opened->alive(), "open self alive with starttime");
+  if (opened) {
+    std::string error;
+    expect(opened->probe_read(&error),
+           error.empty() ? "probe_read self" : error);
+  }
+  (void)gamex::elevated_privileges();
 }
 
 } // namespace

@@ -46,6 +46,10 @@ public:
   IoResult write(std::uintptr_t address,
                  std::span<const std::byte> buffer) const;
 
+  // Пробне читання 1 байта з першого доступного rw/r-регіону.
+  // false + error при EPERM/EACCES або якщо жоден регіон не читається.
+  bool probe_read(std::string *error) const;
+
   std::string last_error() const;
 
   static std::optional<ProcessMemory> open(pid_t pid, std::string *error);
@@ -62,5 +66,7 @@ std::vector<ProcessInfo> list_processes();
 std::string executable_path(pid_t pid);
 std::string ptrace_scope();
 std::optional<unsigned long long> process_starttime(pid_t pid);
+// true якщо ефективний uid == 0 (типово після sudo).
+bool elevated_privileges();
 
 } // namespace gamex

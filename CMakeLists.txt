@@ -13,9 +13,10 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 option(GAMEX_BUILD_UI "Build the Qt interface" ON)
 option(GAMEX_BUILD_TESTS "Build core tests" ON)
 
-set(GAMEX_VERSION_STRING "${PROJECT_VERSION}")
-# Початковий заголовок (на випадок IDE/clangd до першої збірки gamex).
-# Актуальний номер і час білда перезаписує cmake/write_build_info.cmake.
+# Відображувана версія: major.minor.<номер_збірки>. Номер ++ при кожній збірці
+# gamex (файл cmake/build_number, див. write_build_info.cmake).
+set(GAMEX_VERSION_STRING
+    "${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}.0")
 string(TIMESTAMP GAMEX_BUILD_TIME "%Y-%m-%dT%H:%M:%S" UTC)
 string(TIMESTAMP GAMEX_BUILD_TIME_READABLE "%d.%m.%Y %H:%M:%S UTC" UTC)
 set(GAMEX_BUILD_NUMBER "0")
@@ -121,13 +122,15 @@ if(GAMEX_BUILD_UI)
             "${CMAKE_CURRENT_BINARY_DIR}/generated/gamex_build_info.hpp")
         add_custom_target(gamex_build_info
             COMMAND ${CMAKE_COMMAND}
-                -DGAMEX_VERSION_STRING=${PROJECT_VERSION}
+                -DGAMEX_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
+                -DGAMEX_VERSION_MINOR=${PROJECT_VERSION_MINOR}
                 -DGAMEX_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+                -DGAMEX_COUNTER_FILE=${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_number
                 -DGAMEX_TEMPLATE=${CMAKE_CURRENT_SOURCE_DIR}/cmake/gamex_build_info.hpp.in
                 -DGAMEX_OUTPUT=${GAMEX_BUILD_INFO_HEADER}
                 -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/write_build_info.cmake
             BYPRODUCTS ${GAMEX_BUILD_INFO_HEADER}
-            COMMENT "Updating GameX build version/time"
+            COMMENT "Bumping GameX build number / version"
             VERBATIM)
         add_dependencies(gamex gamex_build_info)
         set_source_files_properties(

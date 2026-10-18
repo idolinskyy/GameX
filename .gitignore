@@ -1,4 +1,5 @@
 build/
+cmake/build_number
 cmake-build-*/
 out/
 .cache/

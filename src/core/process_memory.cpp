@@ -78,10 +78,9 @@ std::optional<unsigned long long> process_starttime(pid_t pid) {
         return std::nullopt;
       }
       unsigned long long value = 0;
-      const auto parsed =
-          std::from_chars(raw.data() + static_cast<std::ptrdiff_t>(pos),
-                          raw.data() + static_cast<std::ptrdiff_t>(raw.size()),
-                          value);
+      const auto parsed = std::from_chars(
+          raw.data() + static_cast<std::ptrdiff_t>(pos),
+          raw.data() + static_cast<std::ptrdiff_t>(raw.size()), value);
       if (parsed.ec != std::errc{}) {
         return std::nullopt;
       }
@@ -241,6 +240,45 @@ IoResult ProcessMemory::write(std::uintptr_t address,
   return {.transferred = static_cast<std::size_t>(n), .error = 0};
 }
 
+bool ProcessMemory::probe_read(std::string *error) const {
+  const auto maps = regions();
+  if (maps.empty()) {
+    if (error) {
+      *error = last_error().empty() ? "Немає доступної карти пам'яті процесу"
+                                    : last_error();
+    }
+    return false;
+  }
+  std::byte byte{};
+  bool saw_denied = false;
+  for (const MemoryRegion &region : maps) {
+    if (!region.readable || region.special_kernel()) {
+      continue;
+    }
+    if (region.size() == 0) {
+      continue;
+    }
+    const auto io = read(region.start, std::span<std::byte>(&byte, 1));
+    if (io.ok()) {
+      return true;
+    }
+    if (io.error == EPERM || io.error == EACCES) {
+      saw_denied = true;
+    }
+  }
+  if (error) {
+    if (saw_denied) {
+      *error = "Немає прав читати пам'ять цього процесу (Yama/ptrace). "
+               "Без root типово працює «Запустити» (дочірній процес). "
+               "Або запустіть GameX з правами root (sudo), якщо свідомо "
+               "потрібен доступ до вже відкритої програми.";
+    } else {
+      *error = "Не вдалося прочитати жоден регіон пам'яті процесу";
+    }
+  }
+  return false;
+}
+
 std::vector<ProcessInfo> list_processes() {
   std::vector<ProcessInfo> processes;
   std::error_code error;
@@ -298,5 +336,7 @@ std::string ptrace_scope() {
   input >> value;
   return value;
 }
+
+bool elevated_privileges() { return ::geteuid() == 0; }
 
 } // namespace gamex

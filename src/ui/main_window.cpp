@@ -87,11 +87,12 @@ void MainWindow::build_ui() {
 
   auto *process_button = new QPushButton("Обрати процес", this);
   process_button->setToolTip(
-      "Підключитись до вже запущеної програми свого користувача");
+      "Підключитись до вже запущеної програми. Без root на Ubuntu "
+      "(ptrace_scope=1) часто блокується — тоді краще «Запустити» або sudo.");
   auto *launch_button = new QPushButton("Запустити", this);
   launch_button->setToolTip(
-      "Стартувати гру як дочірній процес. На Ubuntu з ptrace_scope=1 це "
-      "надійний спосіб читати пам'ять.");
+      "Стартувати гру як дочірній процес — основний шлях без root. "
+      "На Ubuntu з ptrace_scope=1 це найнадійніше.");
   auto *region_button = new QPushButton("Блок пам'яті", this);
   region_button->setToolTip(
       "Обмежити пошук одним регіоном або знову шукати по всьому процесу");
@@ -619,6 +620,16 @@ void MainWindow::attach_pid(pid_t pid, const QString &title) {
   scan_session_ = false;
   scanner_.reset();
   memory_ = std::make_unique<ProcessMemory>(std::move(*opened));
+
+  std::string probe_error;
+  if (!memory_->probe_read(&probe_error)) {
+    QMessageBox::warning(this, "GameX", QString::fromStdString(probe_error));
+    memory_.reset();
+    process_label_->setText("Процес не обрано");
+    update_scan_controls();
+    return;
+  }
+
   scanner_ = std::make_unique<Scanner>(*memory_);
   dumps_.clear();
   update_dump_indicators();
@@ -626,18 +637,27 @@ void MainWindow::attach_pid(pid_t pid, const QString &title) {
   region_label_->setText("Область: увесь процес");
   process_label_->setText(title);
   results_->setRowCount(0);
+
   const QString scope = QString::fromStdString(ptrace_scope());
-  QString access = "Процес підключено.";
-  if (scope == "1") {
-    access += " ptrace_scope=1: читання лише процесів, запущених з GameX.";
+  const bool as_root = elevated_privileges();
+  QString access = "Процес підключено · читання пам'яті OK.";
+  if (as_root) {
+    access += " Режим root (підвищені права) — можна чіплятись і до "
+              "не-дочірніх процесів.";
+  } else if (scope == "1") {
+    access += " ptrace_scope=1: без root надійніше запускати гру через "
+              "«Запустити».";
+  } else if (scope == "0") {
+    access += " ptrace_scope=0: читання процесів того ж користувача "
+              "зазвичай дозволене.";
   } else if (!scope.isEmpty()) {
     access += QString(" ptrace_scope=%1.").arg(scope);
   }
   const std::size_t failed = resolve_addresses();
   if (failed == 0) {
-    access += " Прив'язки до модулів оновлено.";
+    access += " Прив'язки оновлено.";
   } else {
-    access += QString(" Не вдалося розв'язати %1 прив'язок (червоні рядки).")
+    access += QString(" Не розв'язано %1 прив'язок (червоні рядки).")
                   .arg(static_cast<qulonglong>(failed));
   }
   statusBar()->showMessage(access);
@@ -1573,17 +1593,13 @@ void MainWindow::open_about() {
           "<h3>GameX %1</h3>"
           "<p>Редактор пам'яті локальних однокористувацьких ігор на Linux.</p>"
           "<p>"
-          "Версія програми: <b>%1</b><br>"
-          "Номер збірки: <b>%2</b><br>"
-          "Час останньої збірки: <b>%3</b>"
+          "Версія програми: <b>%1</b> <br/>"
+          "Час останньої збірки: <b>%2</b>"
           "</p>"
-          "<p>Читає й змінює лише процеси вашого користувача "
-          "(типово — дочірні після «Запустити» при ptrace_scope=1).</p>"
           "<p>© 2026 Ihor Dolinskyi<br>"
           "Ліцензія: GNU GPL версії 3 або пізнішої.<br>"
           "Подробиці про сторонні компоненти — у файлі NOTICE.</p>")
           .arg(QStringLiteral(GAMEX_VERSION_STRING),
-               QStringLiteral(GAMEX_BUILD_NUMBER),
                QStringLiteral(GAMEX_BUILD_TIME_READABLE));
   QMessageBox::about(this, "Про програму", text);
 }
