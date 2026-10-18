@@ -13,6 +13,17 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 option(GAMEX_BUILD_UI "Build the Qt interface" ON)
 option(GAMEX_BUILD_TESTS "Build core tests" ON)
 
+set(GAMEX_VERSION_STRING "${PROJECT_VERSION}")
+# Початковий заголовок (на випадок IDE/clangd до першої збірки gamex).
+# Актуальний номер і час білда перезаписує cmake/write_build_info.cmake.
+string(TIMESTAMP GAMEX_BUILD_TIME "%Y-%m-%dT%H:%M:%S" UTC)
+string(TIMESTAMP GAMEX_BUILD_TIME_READABLE "%d.%m.%Y %H:%M:%S UTC" UTC)
+set(GAMEX_BUILD_NUMBER "0")
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/gamex_build_info.hpp.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/gamex_build_info.hpp"
+    @ONLY)
+
 add_library(gamex_core STATIC
     src/core/memory_region.cpp
     src/core/process_memory.cpp
@@ -103,7 +114,26 @@ if(GAMEX_BUILD_UI)
             resources/gamex.qrc
         )
         target_link_libraries(gamex PRIVATE gamex_core ${GAMEX_QT_LIB})
+        target_include_directories(gamex PRIVATE
+            "${CMAKE_CURRENT_BINARY_DIR}/generated")
         target_compile_options(gamex PRIVATE -Wall -Wextra -Wpedantic)
+        set(GAMEX_BUILD_INFO_HEADER
+            "${CMAKE_CURRENT_BINARY_DIR}/generated/gamex_build_info.hpp")
+        add_custom_target(gamex_build_info
+            COMMAND ${CMAKE_COMMAND}
+                -DGAMEX_VERSION_STRING=${PROJECT_VERSION}
+                -DGAMEX_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+                -DGAMEX_TEMPLATE=${CMAKE_CURRENT_SOURCE_DIR}/cmake/gamex_build_info.hpp.in
+                -DGAMEX_OUTPUT=${GAMEX_BUILD_INFO_HEADER}
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/write_build_info.cmake
+            BYPRODUCTS ${GAMEX_BUILD_INFO_HEADER}
+            COMMENT "Updating GameX build version/time"
+            VERBATIM)
+        add_dependencies(gamex gamex_build_info)
+        set_source_files_properties(
+            src/main.cpp
+            src/ui/main_window.cpp
+            PROPERTIES OBJECT_DEPENDS "${GAMEX_BUILD_INFO_HEADER}")
 
         # Якщо збираємо проти offline-Qt (не системного), вшиваємо шлях до .so,
         # інакше після install підхопиться старіший /lib/.../libQt6Core і буде

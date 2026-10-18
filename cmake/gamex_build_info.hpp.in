@@ -1,0 +1,8 @@
+#pragma once
+
+// Згенеровано CMake під час конфігурації / збірки. Не редагувати вручну.
+
+#define GAMEX_VERSION_STRING "@GAMEX_VERSION_STRING@"
+#define GAMEX_BUILD_NUMBER "@GAMEX_BUILD_NUMBER@"
+#define GAMEX_BUILD_TIME "@GAMEX_BUILD_TIME@"
+#define GAMEX_BUILD_TIME_READABLE "@GAMEX_BUILD_TIME_READABLE@"

@@ -12,6 +12,8 @@
 #include "core/module_map.hpp"
 #include "core/search_value.hpp"
 
+#include "gamex_build_info.hpp"
+
 #include <algorithm>
 
 #include <QAbstractItemView>
@@ -33,7 +35,6 @@
 #include <QProcess>
 #include <QProgressBar>
 #include <QPushButton>
-#include <QShortcut>
 #include <QSpinBox>
 #include <QSplitter>
 #include <QStatusBar>
@@ -65,7 +66,6 @@ void add_type(QComboBox *combo, const QString &label, ValueType type) {
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
   build_ui();
-  setup_shortcuts();
   timer_ = new QTimer(this);
   timer_->setInterval(250);
   connect(timer_, &QTimer::timeout, this, &MainWindow::refresh_views);
@@ -371,10 +371,7 @@ void MainWindow::build_ui() {
   statusBar()->showMessage("Спочатку оберіть процес. Потім знайдіть число → "
                            "додайте вниз → змініть значення.");
 
-  auto *help_menu = menuBar()->addMenu("Довідка");
-  auto *help_action = help_menu->addAction("Як користуватись…");
-  help_action->setShortcut(QKeySequence::HelpContents);
-  connect(help_action, &QAction::triggered, this, &MainWindow::open_help);
+  build_menus();
 
   connect(process_button, &QPushButton::clicked, this,
           &MainWindow::choose_process);
@@ -435,6 +432,111 @@ void MainWindow::build_ui() {
           [this](const QString &) { apply_group_filter(); });
   update_value_fields();
   update_dump_indicators();
+}
+
+void MainWindow::build_menus() {
+  auto *file_menu = menuBar()->addMenu("Файл");
+  auto *save_action = file_menu->addAction("Зберегти таблицю…");
+  save_action->setShortcut(QKeySequence::Save);
+  connect(save_action, &QAction::triggered, this, &MainWindow::save_table);
+  auto *load_action = file_menu->addAction("Завантажити таблицю…");
+  load_action->setShortcut(QKeySequence::Open);
+  connect(load_action, &QAction::triggered, this, &MainWindow::load_table);
+  file_menu->addSeparator();
+  auto *quit_action = file_menu->addAction("Вийти");
+  quit_action->setShortcut(QKeySequence::Quit);
+  connect(quit_action, &QAction::triggered, this, &QWidget::close);
+
+  auto *process_menu = menuBar()->addMenu("Процес");
+  auto *choose_action = process_menu->addAction("Обрати процес…");
+  connect(choose_action, &QAction::triggered, this,
+          &MainWindow::choose_process);
+  auto *launch_action = process_menu->addAction("Запустити…");
+  connect(launch_action, &QAction::triggered, this,
+          &MainWindow::launch_process);
+  auto *region_action = process_menu->addAction("Блок пам'яті…");
+  connect(region_action, &QAction::triggered, this, &MainWindow::choose_region);
+  auto *ram_action = process_menu->addAction("База RAM емулятора…");
+  connect(ram_action, &QAction::triggered, this,
+          &MainWindow::detect_emulator_ram);
+  process_menu->addSeparator();
+  auto *disconnect_action = process_menu->addAction("Від'єднати процес");
+  connect(disconnect_action, &QAction::triggered, this,
+          &MainWindow::disconnect_process);
+
+  auto *search_menu = menuBar()->addMenu("Пошук");
+  auto *scan_action = search_menu->addAction("Шукати");
+  connect(scan_action, &QAction::triggered, this, [this] { run_scan(false); });
+  auto *refine_action = search_menu->addAction("Відсіяти");
+  connect(refine_action, &QAction::triggered, this, [this] { run_scan(true); });
+  auto *stop_action = search_menu->addAction("Стоп");
+  connect(stop_action, &QAction::triggered, this, &MainWindow::stop_scan);
+  auto *reset_action = search_menu->addAction("Скинути пошук");
+  connect(reset_action, &QAction::triggered, this, &MainWindow::reset_scan);
+  search_menu->addSeparator();
+  for (int i = 0; i < kDumpSlots; ++i) {
+    auto *dump_action =
+        search_menu->addAction(QString("Зберегти знімок M%1").arg(i + 1));
+    connect(dump_action, &QAction::triggered, this,
+            [this, i] { capture_dump_slot(i); });
+  }
+  auto *formula_action = search_menu->addAction("Відсіяти за формулою…");
+  connect(formula_action, &QAction::triggered, this,
+          &MainWindow::refine_by_formula);
+  search_menu->addSeparator();
+  auto *add_action = search_menu->addAction("Додати обране в таблицю");
+  connect(add_action, &QAction::triggered, this, &MainWindow::add_selected_hit);
+
+  auto *table_menu = menuBar()->addMenu("Таблиця");
+  auto *remove_action = table_menu->addAction("Прибрати виділене");
+  remove_action->setShortcut(QKeySequence::Delete);
+  connect(remove_action, &QAction::triggered, this,
+          &MainWindow::remove_selected_entries);
+  auto *bind_action = table_menu->addAction("Прив'язати до модуля");
+  connect(bind_action, &QAction::triggered, this,
+          &MainWindow::bind_selected_to_module);
+  auto *pointer_action = table_menu->addAction("Шукати вказівник…");
+  connect(pointer_action, &QAction::triggered, this,
+          &MainWindow::find_pointers_for_selected);
+  table_menu->addSeparator();
+  auto *hold_action = table_menu->addAction("Перемкнути «Тримати»");
+  hold_action->setShortcut(QKeySequence(Qt::Key_F5));
+  connect(hold_action, &QAction::triggered, this,
+          &MainWindow::toggle_freeze_selected);
+  auto *value_action = table_menu->addAction("Задати значення…");
+  value_action->setShortcut(QKeySequence(Qt::Key_F6));
+  connect(value_action, &QAction::triggered, this,
+          &MainWindow::set_value_selected);
+  auto *mode_action = table_menu->addAction("Цикл режиму утримання");
+  mode_action->setShortcut(QKeySequence(Qt::Key_F7));
+  connect(mode_action, &QAction::triggered, this,
+          &MainWindow::cycle_freeze_mode_selected);
+  auto *capture_action = table_menu->addAction("Запам'ятати поточне значення");
+  capture_action->setShortcut(QKeySequence(Qt::Key_F8));
+  connect(capture_action, &QAction::triggered, this,
+          &MainWindow::capture_value_selected);
+
+  auto *tools_menu = menuBar()->addMenu("Інструменти");
+  auto *hex_action = tools_menu->addAction("Hex-перегляд…");
+  connect(hex_action, &QAction::triggered, this,
+          &MainWindow::open_hex_for_selected);
+  auto *structure_action = tools_menu->addAction("Пошук структури…");
+  connect(structure_action, &QAction::triggered, this,
+          &MainWindow::open_structure_dialog);
+  auto *watch_action = tools_menu->addAction("Хто пише…");
+  connect(watch_action, &QAction::triggered, this,
+          &MainWindow::open_watch_for_selected);
+
+  auto *help_menu = menuBar()->addMenu("Довідка");
+  auto *help_action = help_menu->addAction("Як користуватись…");
+  help_action->setShortcut(QKeySequence::HelpContents);
+  connect(help_action, &QAction::triggered, this, &MainWindow::open_help);
+  help_menu->addSeparator();
+  auto *about_action = help_menu->addAction("Про програму…");
+  connect(about_action, &QAction::triggered, this, &MainWindow::open_about);
+  auto *about_qt_action = help_menu->addAction("Про Qt…");
+  connect(about_qt_action, &QAction::triggered, this,
+          &MainWindow::open_about_qt);
 }
 
 void MainWindow::choose_process() {
@@ -671,12 +773,14 @@ QString MainWindow::format_hit_value(const ScanHit &hit) const {
       if (field.offset + fixed_width(field.type) > available) {
         continue;
       }
-      const std::string text = decode_text(
-          field.type, last_structure_->endian,
-          std::span<const std::byte>(data + field.offset, fixed_width(field.type)));
-      const QString name = field.description.empty()
-                               ? QString("+%1").arg(static_cast<qulonglong>(field.offset))
-                               : QString::fromStdString(field.description);
+      const std::string text =
+          decode_text(field.type, last_structure_->endian,
+                      std::span<const std::byte>(data + field.offset,
+                                                 fixed_width(field.type)));
+      const QString name =
+          field.description.empty()
+              ? QString("+%1").arg(static_cast<qulonglong>(field.offset))
+              : QString::fromStdString(field.description);
       parts << QString("%1=%2").arg(name, QString::fromStdString(text));
       if (parts.size() >= 4) {
         break;
@@ -688,7 +792,8 @@ QString MainWindow::format_hit_value(const ScanHit &hit) const {
           .arg(static_cast<qulonglong>(last_structure_->span()));
     }
     QString text = parts.join(", ");
-    if (last_structure_->fields.size() > static_cast<std::size_t>(parts.size())) {
+    if (last_structure_->fields.size() >
+        static_cast<std::size_t>(parts.size())) {
       text += "…";
     }
     return text;
@@ -1124,21 +1229,6 @@ void MainWindow::write_status(const QString &text) {
   statusBar()->showMessage(text, 4000);
 }
 
-void MainWindow::setup_shortcuts() {
-  auto *toggle = new QShortcut(QKeySequence(Qt::Key_F5), this);
-  connect(toggle, &QShortcut::activated, this,
-          &MainWindow::toggle_freeze_selected);
-  auto *set_value = new QShortcut(QKeySequence(Qt::Key_F6), this);
-  connect(set_value, &QShortcut::activated, this,
-          &MainWindow::set_value_selected);
-  auto *cycle = new QShortcut(QKeySequence(Qt::Key_F7), this);
-  connect(cycle, &QShortcut::activated, this,
-          &MainWindow::cycle_freeze_mode_selected);
-  auto *capture = new QShortcut(QKeySequence(Qt::Key_F8), this);
-  connect(capture, &QShortcut::activated, this,
-          &MainWindow::capture_value_selected);
-}
-
 std::vector<int> MainWindow::selected_entry_rows() const {
   std::vector<int> rows;
   for (const QTableWidgetSelectionRange &range : table_->selectedRanges()) {
@@ -1209,7 +1299,8 @@ void MainWindow::toggle_freeze_selected() {
     ++enabled;
   }
   show_entries();
-  write_status(QString("F5: увімкнено %1, вимкнено %2").arg(enabled).arg(disabled));
+  write_status(
+      QString("F5: увімкнено %1, вимкнено %2").arg(enabled).arg(disabled));
 }
 
 void MainWindow::set_value_selected() {
@@ -1354,6 +1445,41 @@ void MainWindow::open_help() {
   dialog.exec();
 }
 
+void MainWindow::open_about() {
+  const QString text =
+      QStringLiteral(
+          "<h3>GameX %1</h3>"
+          "<p>Редактор пам'яті локальних однокористувацьких ігор на Linux.</p>"
+          "<p>"
+          "Версія програми: <b>%1</b><br>"
+          "Номер збірки: <b>%2</b><br>"
+          "Час останньої збірки: <b>%3</b>"
+          "</p>"
+          "<p>Читає й змінює лише процеси вашого користувача "
+          "(типово — дочірні після «Запустити» при ptrace_scope=1).</p>"
+          "<p>© 2026 Ihor Dolinskyi<br>"
+          "Ліцензія: GNU GPL версії 3 або пізнішої.<br>"
+          "Подробиці про сторонні компоненти — у файлі NOTICE.</p>")
+          .arg(QStringLiteral(GAMEX_VERSION_STRING),
+               QStringLiteral(GAMEX_BUILD_NUMBER),
+               QStringLiteral(GAMEX_BUILD_TIME_READABLE));
+  QMessageBox::about(this, "Про програму", text);
+}
+
+void MainWindow::open_about_qt() { QMessageBox::aboutQt(this, "Про Qt"); }
+
+void MainWindow::disconnect_process() {
+  if (!memory_) {
+    write_status("Процес уже не підключено");
+    return;
+  }
+  if (scanning_) {
+    QMessageBox::information(this, "GameX", "Спочатку зупиніть пошук");
+    return;
+  }
+  detach_process("Процес від'єднано");
+}
+
 const EmulatorProfile *MainWindow::current_emulator() const {
   if (emulator_combo_ == nullptr) {
     return nullptr;
@@ -1398,9 +1524,9 @@ void MainWindow::detect_emulator_ram() {
                              "Спочатку підключіть процес емулятора");
     return;
   }
-  auto candidates = find_guest_ram_candidates(
-      *memory_, *profile, limit_region_ ? region_start_ : 0,
-      limit_region_ ? region_end_ : 0);
+  auto candidates = find_guest_ram_candidates(*memory_, *profile,
+                                              limit_region_ ? region_start_ : 0,
+                                              limit_region_ ? region_end_ : 0);
   if (candidates.empty()) {
     emulator_ram_label_->setText("RAM: не знайдено");
     QMessageBox::warning(
@@ -1447,9 +1573,10 @@ void MainWindow::detect_emulator_ram() {
   const QString path = mapping.pathname.empty()
                            ? QString("[анонімний]")
                            : QString::fromStdString(mapping.pathname);
-  region_label_->setText(QString("Область: 0x%1 (%2)")
-                             .arg(static_cast<qulonglong>(mapping.host_base), 0, 16)
-                             .arg(path));
+  region_label_->setText(
+      QString("Область: 0x%1 (%2)")
+          .arg(static_cast<qulonglong>(mapping.host_base), 0, 16)
+          .arg(path));
   emulator_ram_label_->setText(
       QString("RAM: 0x%1 (%2 КіБ) %3")
           .arg(static_cast<qulonglong>(mapping.host_base), 0, 16)
@@ -1460,9 +1587,8 @@ void MainWindow::detect_emulator_ram() {
                        .arg(static_cast<qulonglong>(mapping.host_base), 0, 16)
                        .arg(path);
   if (candidates.size() > 1) {
-    status += QString(" (обрано %1 з %2)")
-                  .arg(chosen + 1)
-                  .arg(candidates.size());
+    status +=
+        QString(" (обрано %1 з %2)").arg(chosen + 1).arg(candidates.size());
   }
   if (!profile->path_contains.empty()) {
     status += QString(" · path hint «%1»")
@@ -1600,7 +1726,8 @@ void MainWindow::open_structure_dialog() {
 
   const StructureTemplate tmpl = dialog.structure();
   last_structure_ = tmpl;
-  last_scan_type_ = tmpl.fields.empty() ? ValueType::Int32 : tmpl.fields.front().type;
+  last_scan_type_ =
+      tmpl.fields.empty() ? ValueType::Int32 : tmpl.fields.front().type;
   last_scan_endian_ = tmpl.endian;
   start_scan_worker(std::move(region), false, tmpl);
 }
@@ -1660,9 +1787,9 @@ void MainWindow::refine_by_formula() {
     return;
   }
   std::string error;
-  const ScanStatus status = dumps_.refine_formula(
-      *scanner_, *memory_, last_scan_type_, last_scan_endian_,
-      formula.toStdString(), &error);
+  const ScanStatus status =
+      dumps_.refine_formula(*scanner_, *memory_, last_scan_type_,
+                            last_scan_endian_, formula.toStdString(), &error);
   if (!status.ok) {
     QMessageBox::warning(this, "GameX", QString::fromStdString(status.message));
     return;

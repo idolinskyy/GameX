@@ -61,9 +61,11 @@ private:
   };
 
   void build_ui();
+  void build_menus();
   void choose_process();
   void launch_process();
   void attach_pid(pid_t pid, const QString &title);
+  void disconnect_process();
   void run_scan(bool refine);
   void start_scan_worker(ScanQuery query, bool refine,
                          std::optional<StructureTemplate> structure);
@@ -88,7 +90,6 @@ private:
   void update_value_fields();
   void update_dump_indicators();
   void write_status(const QString &text);
-  void setup_shortcuts();
   void toggle_freeze_selected();
   void set_value_selected();
   void cycle_freeze_mode_selected();
@@ -101,6 +102,8 @@ private:
   void capture_dump_slot(int slot);
   void refine_by_formula();
   void open_help();
+  void open_about();
+  void open_about_qt();
   void on_emulator_changed();
   void detect_emulator_ram();
   const EmulatorProfile *current_emulator() const;

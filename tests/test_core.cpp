@@ -643,7 +643,8 @@ void test_emulator_guest_mapping() {
   expect(host && *host == 0x7f000100, "guest 0x02000100 -> host");
   const auto guest = gamex::host_to_guest(map, *profile, 0x7f000100);
   expect(guest && *guest == 0x02000100, "host -> guest roundtrip");
-  expect(!gamex::guest_to_host(map, *profile, 0x01000000), "below guest base rejected");
+  expect(!gamex::guest_to_host(map, *profile, 0x01000000),
+         "below guest base rejected");
   expect(!gamex::guest_to_host(map, *profile, 0x02000000 + 256ull * 1024),
          "past RAM end rejected");
 
@@ -653,9 +654,9 @@ void test_emulator_guest_mapping() {
   entry.endian = gamex::Endian::Little;
   entry.emulator = "gba";
   entry.guest_address = 0x02000100;
-  entry.address = 0;  // буде перераховано при resolve
-  auto encoded =
-      gamex::encode_i64(gamex::ValueType::Int32, gamex::Endian::Little, 99, nullptr);
+  entry.address = 0; // буде перераховано при resolve
+  auto encoded = gamex::encode_i64(gamex::ValueType::Int32,
+                                   gamex::Endian::Little, 99, nullptr);
   expect(encoded.has_value(), "encode gold");
   entry.frozen_value = encoded->bytes;
 
@@ -664,14 +665,18 @@ void test_emulator_guest_mapping() {
   gamex::AddressTable table;
   table.add(entry);
   std::string error;
-  expect(table.save(path.string(), &error), error.empty() ? "save emu table" : error);
+  expect(table.save(path.string(), &error),
+         error.empty() ? "save emu table" : error);
   gamex::AddressTable loaded;
-  expect(loaded.load(path.string(), &error), error.empty() ? "load emu table" : error);
+  expect(loaded.load(path.string(), &error),
+         error.empty() ? "load emu table" : error);
   expect(loaded.entries().size() == 1, "one entry");
   if (!loaded.entries().empty()) {
     expect(loaded.entries()[0].emulator == "gba", "emulator id roundtrip");
-    expect(loaded.entries()[0].guest_address == 0x02000100, "guest address roundtrip");
-    expect(loaded.entries()[0].binding_text().find("gba@") == 0, "binding text");
+    expect(loaded.entries()[0].guest_address == 0x02000100,
+           "guest address roundtrip");
+    expect(loaded.entries()[0].binding_text().find("gba@") == 0,
+           "binding text");
   }
   std::filesystem::remove(path);
 }
@@ -929,9 +934,9 @@ void test_dump_formula_empty_slot() {
   gamex::Scanner scanner(*memory);
   std::string error;
   gamex::DumpBook book;
-  const auto status = book.refine_formula(
-      scanner, *memory, gamex::ValueType::Int32, gamex::Endian::Little,
-      "(M1<>M2)", &error);
+  const auto status =
+      book.refine_formula(scanner, *memory, gamex::ValueType::Int32,
+                          gamex::Endian::Little, "(M1<>M2)", &error);
   expect(!status.ok, "refine without hits fails");
 
   static std::int32_t dump_probe = 424242;
@@ -943,8 +948,8 @@ void test_dump_formula_empty_slot() {
   exact.op = gamex::CompareOp::Equal;
   exact.alignment = 4;
   exact.writable_only = true;
-  auto prepared = gamex::prepare_search_value(exact.type, exact.endian,
-                                              "424242", &error);
+  auto prepared =
+      gamex::prepare_search_value(exact.type, exact.endian, "424242", &error);
   expect(prepared.has_value(), "prepare dump probe");
   if (!prepared) {
     return;
