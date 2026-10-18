@@ -63,11 +63,24 @@ Number clamp_number(const Number &current, const Number *min,
   return value;
 }
 
+bool write_checked(const ProcessMemory &memory, std::uintptr_t address,
+                   std::span<const std::byte> bytes,
+                   FreezeTickStats &stats) {
+  const auto io = memory.write(address, bytes);
+  if (!io.ok() || io.transferred != bytes.size()) {
+    ++stats.write_failures;
+    return false;
+  }
+  return true;
+}
+
 } // namespace
 
-void Freezer::tick(const ProcessMemory &memory, AddressTable &table) const {
+FreezeTickStats Freezer::tick(const ProcessMemory &memory,
+                              AddressTable &table) const {
+  FreezeTickStats stats;
   if (!memory.alive()) {
-    return;
+    return stats;
   }
   for (AddressEntry &entry : table.entries()) {
     if (!entry.frozen || entry.frozen_value.empty() || !entry.resolved) {
@@ -76,14 +89,16 @@ void Freezer::tick(const ProcessMemory &memory, AddressTable &table) const {
     if (!is_fixed_width(entry.type)) {
       continue;
     }
+    ++stats.active;
     std::vector<std::byte> current(entry.frozen_value.size());
     const auto io = memory.read(entry.address, current);
     if (!io.ok() || io.transferred != current.size()) {
+      ++stats.read_failures;
       continue;
     }
     if (entry.freeze_mode == FreezeMode::Normal) {
       if (current != entry.frozen_value) {
-        memory.write(entry.address, entry.frozen_value);
+        write_checked(memory, entry.address, entry.frozen_value, stats);
       }
       continue;
     }
@@ -91,13 +106,14 @@ void Freezer::tick(const ProcessMemory &memory, AddressTable &table) const {
     const auto locked =
         decode_number(entry.type, entry.endian, entry.frozen_value);
     if (!now || !locked) {
+      ++stats.read_failures;
       continue;
     }
     if (entry.freeze_mode == FreezeMode::AllowIncrease) {
       if (compare_numbers(*now, *locked) > 0) {
         entry.frozen_value = current;
       } else if (current != entry.frozen_value) {
-        memory.write(entry.address, entry.frozen_value);
+        write_checked(memory, entry.address, entry.frozen_value, stats);
       }
       continue;
     }
@@ -105,7 +121,7 @@ void Freezer::tick(const ProcessMemory &memory, AddressTable &table) const {
       if (compare_numbers(*now, *locked) < 0) {
         entry.frozen_value = current;
       } else if (current != entry.frozen_value) {
-        memory.write(entry.address, entry.frozen_value);
+        write_checked(memory, entry.address, entry.frozen_value, stats);
       }
       continue;
     }
@@ -122,10 +138,13 @@ void Freezer::tick(const ProcessMemory &memory, AddressTable &table) const {
       }
       const auto replacement = encode_from_number(entry, clamped);
       if (!replacement.empty()) {
-        memory.write(entry.address, replacement);
+        write_checked(memory, entry.address, replacement, stats);
+      } else {
+        ++stats.write_failures;
       }
     }
   }
+  return stats;
 }
 
 } // namespace gamex

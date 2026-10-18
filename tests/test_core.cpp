@@ -920,6 +920,57 @@ void test_pointer_scan_child() {
   reap(pid);
 }
 
+void test_dump_formula_empty_slot() {
+  auto memory = gamex::ProcessMemory::open(::getpid(), nullptr);
+  expect(memory.has_value(), "open self for dump book");
+  if (!memory) {
+    return;
+  }
+  gamex::Scanner scanner(*memory);
+  std::string error;
+  gamex::DumpBook book;
+  const auto status = book.refine_formula(
+      scanner, *memory, gamex::ValueType::Int32, gamex::Endian::Little,
+      "(M1<>M2)", &error);
+  expect(!status.ok, "refine without hits fails");
+
+  static std::int32_t dump_probe = 424242;
+  gamex::DumpBook book2;
+  gamex::Scanner scanner2(*memory);
+  gamex::ScanQuery exact;
+  exact.type = gamex::ValueType::Int32;
+  exact.endian = gamex::Endian::Little;
+  exact.op = gamex::CompareOp::Equal;
+  exact.alignment = 4;
+  exact.writable_only = true;
+  auto prepared = gamex::prepare_search_value(exact.type, exact.endian,
+                                              "424242", &error);
+  expect(prepared.has_value(), "prepare dump probe");
+  if (!prepared) {
+    return;
+  }
+  exact.value = std::move(prepared->value);
+  exact.mask = std::move(prepared->mask);
+  exact.skip_path = gamex::executable_path(::getpid());
+  const auto scanned = scanner2.scan(exact, {});
+  expect(scanned.ok && scanned.hit_count > 0, "found dump_probe");
+  expect(book2.capture_hits(0, scanner2, *memory, exact.type, exact.endian,
+                            &error),
+         error.empty() ? "capture M1" : error);
+  const auto bad = book2.refine_formula(scanner2, *memory, exact.type,
+                                        exact.endian, "(M1<>M2)", &error);
+  expect(!bad.ok, "M2 empty must fail");
+  expect(bad.message.find("M2") != std::string::npos, "mentions empty M2");
+  (void)dump_probe;
+}
+
+void test_process_starttime() {
+  const auto start = gamex::process_starttime(::getpid());
+  expect(start.has_value() && *start > 0, "self starttime readable");
+  auto opened = gamex::ProcessMemory::open(::getpid(), nullptr);
+  expect(opened && opened->alive(), "open self alive with starttime");
+}
+
 } // namespace
 
 int main() {
@@ -932,6 +983,8 @@ int main() {
   test_unknown_region_and_cancel();
   test_table_roundtrip();
   test_expression_and_mask();
+  test_dump_formula_empty_slot();
+  test_process_starttime();
   test_module_bind_and_resolve();
   test_structure_scan_child();
   test_emulator_guest_mapping();

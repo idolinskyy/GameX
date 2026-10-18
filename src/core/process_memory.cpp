@@ -53,7 +53,60 @@ std::string comm_of(pid_t pid) {
 
 } // namespace
 
-ProcessMemory::ProcessMemory(pid_t pid) : pid_(pid) {}
+std::optional<unsigned long long> process_starttime(pid_t pid) {
+  if (pid <= 0) {
+    return std::nullopt;
+  }
+  const std::string raw = read_file("/proc/" + std::to_string(pid) + "/stat");
+  if (raw.empty()) {
+    return std::nullopt;
+  }
+  // Формат: pid (comm) state ... — comm може містити ')' і пробіли.
+  const auto close = raw.rfind(')');
+  if (close == std::string::npos || close + 2 >= raw.size()) {
+    return std::nullopt;
+  }
+  std::size_t pos = close + 2;
+  // Після ')': state + 19 полів до starttime (поле 22 загалом).
+  for (int field = 0; field < 20; ++field) {
+    while (pos < raw.size() && raw[pos] == ' ') {
+      ++pos;
+    }
+    const auto next = raw.find(' ', pos);
+    if (next == std::string::npos) {
+      if (field != 19) {
+        return std::nullopt;
+      }
+      unsigned long long value = 0;
+      const auto parsed =
+          std::from_chars(raw.data() + static_cast<std::ptrdiff_t>(pos),
+                          raw.data() + static_cast<std::ptrdiff_t>(raw.size()),
+                          value);
+      if (parsed.ec != std::errc{}) {
+        return std::nullopt;
+      }
+      return value;
+    }
+    if (field == 19) {
+      unsigned long long value = 0;
+      const auto parsed = std::from_chars(
+          raw.data() + static_cast<std::ptrdiff_t>(pos),
+          raw.data() + static_cast<std::ptrdiff_t>(next), value);
+      if (parsed.ec != std::errc{}) {
+        return std::nullopt;
+      }
+      return value;
+    }
+    pos = next + 1;
+  }
+  return std::nullopt;
+}
+
+ProcessMemory::ProcessMemory(pid_t pid) : pid_(pid) {
+  if (auto start = process_starttime(pid)) {
+    starttime_ = *start;
+  }
+}
 
 std::string ProcessMemory::last_error() const {
   std::lock_guard lock(mutex_);
@@ -61,15 +114,18 @@ std::string ProcessMemory::last_error() const {
 }
 
 ProcessMemory::ProcessMemory(ProcessMemory &&other) noexcept
-    : pid_(other.pid_) {
+    : pid_(other.pid_), starttime_(other.starttime_) {
   other.pid_ = -1;
+  other.starttime_ = 0;
 }
 
 ProcessMemory &ProcessMemory::operator=(ProcessMemory &&other) noexcept {
   if (this != &other) {
     std::lock_guard lock(mutex_);
     pid_ = other.pid_;
+    starttime_ = other.starttime_;
     other.pid_ = -1;
+    other.starttime_ = 0;
     last_error_.clear();
   }
   return *this;
@@ -79,8 +135,14 @@ bool ProcessMemory::alive() const {
   if (pid_ <= 0) {
     return false;
   }
-  const std::string path = "/proc/" + std::to_string(pid_);
-  return access(path.c_str(), F_OK) == 0;
+  const auto current = process_starttime(pid_);
+  if (!current) {
+    return false;
+  }
+  if (starttime_ != 0 && *current != starttime_) {
+    return false;
+  }
+  return true;
 }
 
 bool ProcessMemory::valid() const { return alive(); }
@@ -94,6 +156,12 @@ std::optional<ProcessMemory> ProcessMemory::open(pid_t pid,
     return std::nullopt;
   }
   ProcessMemory memory(pid);
+  if (memory.starttime_ == 0) {
+    if (error) {
+      *error = "Процес не існує або недоступний /proc";
+    }
+    return std::nullopt;
+  }
   if (!memory.alive()) {
     if (error) {
       *error = "Процес не існує";

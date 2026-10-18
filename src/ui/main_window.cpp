@@ -16,7 +16,6 @@
 
 #include <QAbstractItemView>
 #include <QAction>
-#include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QFileDialog>
@@ -48,6 +47,7 @@
 
 #include <unistd.h>
 
+#include <span>
 #include <utility>
 
 namespace gamex {
@@ -73,11 +73,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
 }
 
 MainWindow::~MainWindow() {
-  cancel_.store(true);
-  if (scan_thread_ != nullptr && scan_thread_->isRunning()) {
-    scan_thread_->quit();
-    scan_thread_->wait();
-  }
+  wait_for_scan_thread();
   if (child_ != nullptr && child_->state() != QProcess::NotRunning) {
     ignore_child_errors_ = true;
     child_->kill();
@@ -295,7 +291,8 @@ void MainWindow::build_ui() {
       "Шаблон кількох полів зі зсувами; пошук одним проходом");
   auto *watch_button = new QPushButton("Хто пише…", this);
   watch_button->setToolTip(
-      "Апаратний watchpoint (ptrace). Лише процес, запущений з GameX.");
+      "Апаратний watchpoint (ptrace). Лише процес з GameX. RIP у звіті — "
+      "інструкція після запису; нові потоки підхоплюються (TRACECLONE).");
   auto *save_button = new QPushButton("Зберегти .gxt", this);
   auto *load_button = new QPushButton("Завантажити .gxt", this);
 
@@ -304,14 +301,12 @@ void MainWindow::build_ui() {
   formula_edit_->setToolTip("Відсів по знімках M1..M4. Спочатку «Зберегти M», "
                             "змініть значення в грі, знову M, потім формула.");
   auto *formula_button = new QPushButton("Формула", this);
-  auto *m1 = new QPushButton("M1", this);
-  auto *m2 = new QPushButton("M2", this);
-  auto *m3 = new QPushButton("M3", this);
-  auto *m4 = new QPushButton("M4", this);
-  m1->setToolTip("Зберегти поточні значення збігів як знімок M1");
-  m2->setToolTip("Зберегти поточні значення збігів як знімок M2");
-  m3->setToolTip("Зберегти поточні значення збігів як знімок M3");
-  m4->setToolTip("Зберегти поточні значення збігів як знімок M4");
+  for (int i = 0; i < kDumpSlots; ++i) {
+    dump_buttons_[static_cast<std::size_t>(i)] =
+        new QPushButton(QString("M%1").arg(i + 1), this);
+    dump_buttons_[static_cast<std::size_t>(i)]->setToolTip(
+        QString("Зберегти поточні значення збігів як знімок M%1").arg(i + 1));
+  }
 
   hits_hint_ =
       new QLabel("Знайдені адреси. Подвійне клацання або кнопка «Додати обране "
@@ -341,10 +336,9 @@ void MainWindow::build_ui() {
   auto *table_buttons = new QHBoxLayout();
   auto *dump_row = new QHBoxLayout();
   dump_row->addWidget(new QLabel("Знімки:", this));
-  dump_row->addWidget(m1);
-  dump_row->addWidget(m2);
-  dump_row->addWidget(m3);
-  dump_row->addWidget(m4);
+  for (QPushButton *button : dump_buttons_) {
+    dump_row->addWidget(button);
+  }
   dump_row->addWidget(formula_edit_, 1);
   dump_row->addWidget(formula_button);
   bottom_layout->addLayout(dump_row);
@@ -412,10 +406,10 @@ void MainWindow::build_ui() {
           &MainWindow::open_structure_dialog);
   connect(watch_button, &QPushButton::clicked, this,
           &MainWindow::open_watch_for_selected);
-  connect(m1, &QPushButton::clicked, this, [this] { capture_dump_slot(0); });
-  connect(m2, &QPushButton::clicked, this, [this] { capture_dump_slot(1); });
-  connect(m3, &QPushButton::clicked, this, [this] { capture_dump_slot(2); });
-  connect(m4, &QPushButton::clicked, this, [this] { capture_dump_slot(3); });
+  for (int i = 0; i < kDumpSlots; ++i) {
+    connect(dump_buttons_[static_cast<std::size_t>(i)], &QPushButton::clicked,
+            this, [this, i] { capture_dump_slot(i); });
+  }
   connect(formula_button, &QPushButton::clicked, this,
           &MainWindow::refine_by_formula);
   connect(save_button, &QPushButton::clicked, this, &MainWindow::save_table);
@@ -431,10 +425,16 @@ void MainWindow::build_ui() {
   connect(table_, &QTableWidget::itemChanged, this,
           &MainWindow::on_table_changed);
   connect(results_, &QTableWidget::itemDoubleClicked, this,
-          [this](QTableWidgetItem *) { add_selected_hit(); });
+          [this](QTableWidgetItem *item) {
+            if (item != nullptr) {
+              results_->selectRow(item->row());
+            }
+            add_selected_hit();
+          });
   connect(group_filter_, &QLineEdit::textChanged, this,
           [this](const QString &) { apply_group_filter(); });
   update_value_fields();
+  update_dump_indicators();
 }
 
 void MainWindow::choose_process() {
@@ -510,10 +510,12 @@ void MainWindow::attach_pid(pid_t pid, const QString &title) {
     QMessageBox::warning(this, "GameX", QString::fromStdString(error));
     return;
   }
-  stop_scan();
+  wait_for_scan_thread();
   scanner_.reset();
   memory_ = std::make_unique<ProcessMemory>(std::move(*opened));
   scanner_ = std::make_unique<Scanner>(*memory_);
+  dumps_.clear();
+  update_dump_indicators();
   limit_region_ = false;
   region_label_->setText("Область: увесь процес");
   process_label_->setText(title);
@@ -577,30 +579,22 @@ ScanQuery MainWindow::current_query(std::string *error) const {
   return query;
 }
 
-void MainWindow::run_scan(bool refine) {
-  if (scanning_) {
-    return;
-  }
-  if (!scanner_ || !memory_) {
-    QMessageBox::information(this, "GameX", "Спочатку оберіть процес");
-    return;
-  }
-  std::string error;
-  ScanQuery query = current_query(&error);
-  if (!error.empty()) {
-    QMessageBox::warning(this, "GameX", QString::fromStdString(error));
-    return;
-  }
+void MainWindow::start_scan_worker(ScanQuery query, bool refine,
+                                   std::optional<StructureTemplate> structure) {
   cancel_.store(false);
-  last_structure_.reset();
   set_scanning(true);
   progress_->setValue(0);
-  progress_->setFormat(refine ? "Відсів…" : "Пошук…");
+  if (structure) {
+    progress_->setFormat("Структура…");
+  } else {
+    progress_->setFormat(refine ? "Відсів…" : "Пошук…");
+  }
 
   auto *thread = new QThread(this);
   scan_thread_ = thread;
-  auto *worker = new ScanWorker(scanner_.get(), std::move(query), refine,
-                                &cancel_, &last_status_, &status_mutex_);
+  auto *worker =
+      new ScanWorker(scanner_.get(), std::move(query), refine, &cancel_,
+                     &last_status_, &status_mutex_, std::move(structure));
   worker->moveToThread(thread);
   connect(thread, &QThread::started, worker, &ScanWorker::start);
   connect(worker, &ScanWorker::progress, this, &MainWindow::on_scan_progress);
@@ -616,6 +610,38 @@ void MainWindow::run_scan(bool refine) {
   thread->start();
 }
 
+void MainWindow::wait_for_scan_thread() {
+  cancel_.store(true);
+  if (scan_thread_ != nullptr && scan_thread_->isRunning()) {
+    scan_thread_->wait();
+  }
+  scan_thread_ = nullptr;
+  scanning_ = false;
+  if (scan_button_ != nullptr) {
+    set_scanning(false);
+  }
+}
+
+void MainWindow::run_scan(bool refine) {
+  if (scanning_) {
+    return;
+  }
+  if (!scanner_ || !memory_) {
+    QMessageBox::information(this, "GameX", "Спочатку оберіть процес");
+    return;
+  }
+  std::string error;
+  ScanQuery query = current_query(&error);
+  if (!error.empty()) {
+    QMessageBox::warning(this, "GameX", QString::fromStdString(error));
+    return;
+  }
+  last_structure_.reset();
+  last_scan_type_ = query.type;
+  last_scan_endian_ = query.endian;
+  start_scan_worker(std::move(query), refine, std::nullopt);
+}
+
 void MainWindow::reset_scan() {
   if (scanning_) {
     stop_scan();
@@ -629,6 +655,61 @@ void MainWindow::reset_scan() {
   statusBar()->showMessage("Пошук скинуто");
 }
 
+QString MainWindow::format_hit_value(const ScanHit &hit) const {
+  if (!memory_) {
+    return {};
+  }
+  if (last_structure_) {
+    std::vector<std::byte> bytes(hit.previous.size());
+    const auto io = memory_->read(hit.address, bytes);
+    const std::byte *data =
+        io.transferred == bytes.size() ? bytes.data() : hit.previous.data();
+    const std::size_t available =
+        io.transferred == bytes.size() ? bytes.size() : hit.previous.size();
+    QStringList parts;
+    for (const StructureField &field : last_structure_->fields) {
+      if (field.offset + fixed_width(field.type) > available) {
+        continue;
+      }
+      const std::string text = decode_text(
+          field.type, last_structure_->endian,
+          std::span<const std::byte>(data + field.offset, fixed_width(field.type)));
+      const QString name = field.description.empty()
+                               ? QString("+%1").arg(static_cast<qulonglong>(field.offset))
+                               : QString::fromStdString(field.description);
+      parts << QString("%1=%2").arg(name, QString::fromStdString(text));
+      if (parts.size() >= 4) {
+        break;
+      }
+    }
+    if (parts.isEmpty()) {
+      return QString("структура «%1» · %2 Б")
+          .arg(QString::fromStdString(last_structure_->name))
+          .arg(static_cast<qulonglong>(last_structure_->span()));
+    }
+    QString text = parts.join(", ");
+    if (last_structure_->fields.size() > static_cast<std::size_t>(parts.size())) {
+      text += "…";
+    }
+    return text;
+  }
+  if (!is_fixed_width(last_scan_type_)) {
+    return QString::fromStdString(
+        decode_text(last_scan_type_, last_scan_endian_, hit.previous));
+  }
+  std::vector<std::byte> bytes(fixed_width(last_scan_type_));
+  const auto io = memory_->read(hit.address, bytes);
+  if (io.transferred == bytes.size()) {
+    return QString::fromStdString(
+        decode_text(last_scan_type_, last_scan_endian_, bytes));
+  }
+  if (hit.previous.size() == bytes.size()) {
+    return QString::fromStdString(
+        decode_text(last_scan_type_, last_scan_endian_, hit.previous));
+  }
+  return "?";
+}
+
 void MainWindow::show_hits() {
   if (!scanner_ || !memory_) {
     return;
@@ -637,20 +718,15 @@ void MainWindow::show_hits() {
   const int rows = static_cast<int>(std::min<std::size_t>(
       scanner_->hit_count(), static_cast<std::size_t>(kPreview)));
   results_->setRowCount(rows);
-  const auto type = static_cast<ValueType>(type_combo_->currentData().toInt());
-  const auto endian = static_cast<Endian>(endian_combo_->currentData().toInt());
+  const QString value_header =
+      last_structure_ ? QString("Поля структури") : QString("Значення зараз");
+  results_->setHorizontalHeaderLabels({"Адреса", value_header});
   for (int row = 0; row < rows; ++row) {
     const ScanHit hit = scanner_->hit_at(static_cast<std::size_t>(row));
     auto *address = new QTableWidgetItem(hex_address(hit.address));
     address->setData(Qt::UserRole, static_cast<qulonglong>(hit.address));
     results_->setItem(row, 0, address);
-    std::vector<std::byte> bytes(hit.previous.size());
-    const auto io = memory_->read(hit.address, bytes);
-    const std::string text = io.transferred == bytes.size()
-                                 ? decode_text(type, endian, bytes)
-                                 : decode_text(type, endian, hit.previous);
-    results_->setItem(row, 1,
-                      new QTableWidgetItem(QString::fromStdString(text)));
+    results_->setItem(row, 1, new QTableWidgetItem(format_hit_value(hit)));
   }
 }
 
@@ -665,8 +741,6 @@ void MainWindow::add_selected_hit() {
         "Спочатку виділіть рядок у списку знайдених адрес зверху.");
     return;
   }
-  const auto type = static_cast<ValueType>(type_combo_->currentData().toInt());
-  const auto endian = static_cast<Endian>(endian_combo_->currentData().toInt());
   const ModuleMap modules = ModuleMap::from_process(*memory_);
   const EmulatorProfile *emu = current_emulator();
   int added = 0;
@@ -707,11 +781,12 @@ void MainWindow::add_selected_hit() {
       }
       AddressEntry entry;
       entry.address = base;
-      entry.type = type;
-      entry.endian = endian;
+      entry.type = last_scan_type_;
+      entry.endian = last_scan_endian_;
       entry.description =
           "Адреса " + std::to_string(addresses_.entries().size() + 1);
-      const std::size_t width = is_fixed_width(type) ? fixed_width(type) : 0;
+      const std::size_t width =
+          is_fixed_width(last_scan_type_) ? fixed_width(last_scan_type_) : 0;
       if (width != 0) {
         entry.frozen_value.resize(width);
         memory_->read(entry.address, entry.frozen_value);
@@ -861,10 +936,15 @@ void MainWindow::on_table_changed(QTableWidgetItem *item) {
           this, "GameX", "Спочатку розв'яжіть прив'язку (модуль не знайдено)");
       return;
     }
-    entry.frozen = item->checkState() == Qt::Checked;
-    if (entry.frozen && memory_ && is_fixed_width(entry.type)) {
-      entry.frozen_value.resize(fixed_width(entry.type));
-      memory_->read(entry.address, entry.frozen_value);
+    if (item->checkState() != Qt::Checked) {
+      entry.frozen = false;
+      return;
+    }
+    std::string error;
+    if (!try_enable_hold(entry, &error)) {
+      item->setCheckState(Qt::Unchecked);
+      QMessageBox::warning(this, "GameX", QString::fromStdString(error));
+      return;
     }
     return;
   }
@@ -975,10 +1055,19 @@ void MainWindow::refresh_views() {
     return;
   }
   if (!memory_->alive()) {
-    statusBar()->showMessage("Процес завершився");
+    statusBar()->showMessage(
+        "Процес завершився або PID зайнятий іншим процесом");
     return;
   }
-  freezer_.tick(*memory_, addresses_);
+  const FreezeTickStats freeze = freezer_.tick(*memory_, addresses_);
+  if (freeze.read_failures > 0 || freeze.write_failures > 0) {
+    statusBar()->showMessage(
+        QString("Заморозка: активних %1 · помилок читання %2 · запису %3")
+            .arg(static_cast<qulonglong>(freeze.active))
+            .arg(static_cast<qulonglong>(freeze.read_failures))
+            .arg(static_cast<qulonglong>(freeze.write_failures)),
+        2000);
+  }
   if (table_->is_editing()) {
     return;
   }
@@ -1064,22 +1153,63 @@ std::vector<int> MainWindow::selected_entry_rows() const {
   return rows;
 }
 
+bool MainWindow::try_enable_hold(AddressEntry &entry, std::string *error) {
+  if (!entry.resolved) {
+    if (error) {
+      *error = "Адреса не розв'язана — утримання заборонено";
+    }
+    return false;
+  }
+  if (!memory_ || !memory_->alive()) {
+    if (error) {
+      *error = "Процес не підключено";
+    }
+    return false;
+  }
+  if (!is_fixed_width(entry.type)) {
+    if (error) {
+      *error = "Утримання працює лише для числових типів";
+    }
+    return false;
+  }
+  entry.frozen_value.resize(fixed_width(entry.type));
+  const auto io = memory_->read(entry.address, entry.frozen_value);
+  if (!io.ok() || io.transferred != entry.frozen_value.size()) {
+    entry.frozen_value.clear();
+    if (error) {
+      *error = "Не вдалося прочитати значення для утримання";
+    }
+    return false;
+  }
+  entry.frozen = true;
+  return true;
+}
+
 void MainWindow::toggle_freeze_selected() {
   const auto rows = selected_entry_rows();
   if (rows.empty()) {
     write_status("F5: виділіть рядок у нижній таблиці");
     return;
   }
+  int enabled = 0;
+  int disabled = 0;
   for (int row : rows) {
     AddressEntry &entry = addresses_.entries()[static_cast<std::size_t>(row)];
-    entry.frozen = !entry.frozen;
-    if (entry.frozen && memory_ && is_fixed_width(entry.type)) {
-      entry.frozen_value.resize(fixed_width(entry.type));
-      memory_->read(entry.address, entry.frozen_value);
+    if (entry.frozen) {
+      entry.frozen = false;
+      ++disabled;
+      continue;
     }
+    std::string error;
+    if (!try_enable_hold(entry, &error)) {
+      QMessageBox::warning(this, "GameX", QString::fromStdString(error));
+      show_entries();
+      return;
+    }
+    ++enabled;
   }
   show_entries();
-  write_status("F5: перемкнуто «Тримати»");
+  write_status(QString("F5: увімкнено %1, вимкнено %2").arg(enabled).arg(disabled));
 }
 
 void MainWindow::set_value_selected() {
@@ -1102,6 +1232,12 @@ void MainWindow::set_value_selected() {
   int written = 0;
   for (int row : rows) {
     AddressEntry &entry = addresses_.entries()[static_cast<std::size_t>(row)];
+    if (!entry.resolved) {
+      QMessageBox::warning(this, "GameX",
+                           "Адреса не розв'язана — запис заборонено");
+      show_entries();
+      return;
+    }
     if (!is_fixed_width(entry.type)) {
       continue;
     }
@@ -1262,23 +1398,77 @@ void MainWindow::detect_emulator_ram() {
                              "Спочатку підключіть процес емулятора");
     return;
   }
-  std::string error;
-  const auto mapping = locate_guest_ram(*memory_, *profile, &error,
-                                        limit_region_ ? region_start_ : 0,
-                                        limit_region_ ? region_end_ : 0);
-  if (!mapping) {
+  auto candidates = find_guest_ram_candidates(
+      *memory_, *profile, limit_region_ ? region_start_ : 0,
+      limit_region_ ? region_end_ : 0);
+  if (candidates.empty()) {
     emulator_ram_label_->setText("RAM: не знайдено");
-    QMessageBox::warning(this, "GameX", QString::fromStdString(error));
+    QMessageBox::warning(
+        this, "GameX",
+        QString("Не знайдено регіон для «%1». Завантажте гру або обмежте "
+                "пошук кнопкою «Блок пам'яті».")
+            .arg(QString::fromStdString(profile->title)));
     return;
   }
+
+  int chosen = 0;
+  if (candidates.size() > 1) {
+    QStringList items;
+    for (std::size_t i = 0; i < candidates.size(); ++i) {
+      const GuestRamMapping &c = candidates[i];
+      const QString path = c.pathname.empty()
+                               ? QString("[анонімний]")
+                               : QString::fromStdString(c.pathname);
+      items << QString("%1) 0x%2 · %3 КіБ · %4")
+                   .arg(static_cast<qulonglong>(i + 1))
+                   .arg(static_cast<qulonglong>(c.host_base), 0, 16)
+                   .arg(static_cast<qulonglong>(c.size() / 1024))
+                   .arg(path);
+    }
+    bool ok = false;
+    const QString picked = QInputDialog::getItem(
+        this, "Кілька кандидатів RAM",
+        QString("Знайдено %1 регіонів під «%2». Оберіть правильний блок "
+                "(pathname з /proc/…/maps):")
+            .arg(candidates.size())
+            .arg(QString::fromStdString(profile->title)),
+        items, 0, false, &ok);
+    if (!ok) {
+      return;
+    }
+    const int index = static_cast<int>(items.indexOf(picked));
+    chosen = index < 0 ? 0 : index;
+  }
+
+  const GuestRamMapping &mapping = candidates[static_cast<std::size_t>(chosen)];
+  limit_region_ = true;
+  region_start_ = mapping.host_base;
+  region_end_ = mapping.host_end;
+  const QString path = mapping.pathname.empty()
+                           ? QString("[анонімний]")
+                           : QString::fromStdString(mapping.pathname);
+  region_label_->setText(QString("Область: 0x%1 (%2)")
+                             .arg(static_cast<qulonglong>(mapping.host_base), 0, 16)
+                             .arg(path));
   emulator_ram_label_->setText(
-      QString("RAM: 0x%1 (%2 КіБ)")
-          .arg(static_cast<qulonglong>(mapping->host_base), 0, 16)
-          .arg(static_cast<qulonglong>(mapping->size() / 1024)));
-  write_status(QString("Гостьова база %1 → host 0x%2")
-                   .arg(QString("0x%1").arg(
-                       static_cast<qulonglong>(profile->guest_base), 0, 16))
-                   .arg(static_cast<qulonglong>(mapping->host_base), 0, 16));
+      QString("RAM: 0x%1 (%2 КіБ) %3")
+          .arg(static_cast<qulonglong>(mapping.host_base), 0, 16)
+          .arg(static_cast<qulonglong>(mapping.size() / 1024))
+          .arg(path));
+  QString status = QString("Гостьова база 0x%1 → host 0x%2 · %3")
+                       .arg(static_cast<qulonglong>(profile->guest_base), 0, 16)
+                       .arg(static_cast<qulonglong>(mapping.host_base), 0, 16)
+                       .arg(path);
+  if (candidates.size() > 1) {
+    status += QString(" (обрано %1 з %2)")
+                  .arg(chosen + 1)
+                  .arg(candidates.size());
+  }
+  if (!profile->path_contains.empty()) {
+    status += QString(" · path hint «%1»")
+                  .arg(QString::fromStdString(profile->path_contains));
+  }
+  write_status(status);
 }
 
 bool MainWindow::bind_entry_to_emulator(AddressEntry &entry,
@@ -1408,34 +1598,11 @@ void MainWindow::open_structure_dialog() {
   }
   region.skip_path = executable_path(static_cast<pid_t>(::getpid()));
 
-  cancel_.store(false);
-  set_scanning(true);
-  progress_->setValue(0);
-  progress_->setFormat("Структура…");
   const StructureTemplate tmpl = dialog.structure();
   last_structure_ = tmpl;
-  last_status_ = scanner_->scan_structure(
-      tmpl, region, [this](std::uint64_t scanned, std::uint64_t total) {
-        if (cancel_.load()) {
-          return false;
-        }
-        on_scan_progress(static_cast<qulonglong>(scanned),
-                         static_cast<qulonglong>(total));
-        QApplication::processEvents();
-        return !cancel_.load();
-      });
-  set_scanning(false);
-  progress_->setRange(0, 1000);
-  progress_->setValue(last_status_.cancelled ? progress_->value() : 1000);
-  show_hits();
-  if (!last_status_.ok) {
-    QMessageBox::warning(this, "GameX",
-                         QString::fromStdString(last_status_.message));
-    return;
-  }
-  write_status(QString("Структура «%1»: %2 баз")
-                   .arg(QString::fromStdString(tmpl.name))
-                   .arg(static_cast<qulonglong>(last_status_.hit_count)));
+  last_scan_type_ = tmpl.fields.empty() ? ValueType::Int32 : tmpl.fields.front().type;
+  last_scan_endian_ = tmpl.endian;
+  start_scan_worker(std::move(region), false, tmpl);
 }
 
 void MainWindow::capture_dump_slot(int slot) {
@@ -1443,16 +1610,42 @@ void MainWindow::capture_dump_slot(int slot) {
     QMessageBox::information(this, "GameX", "Немає збігів для знімка");
     return;
   }
+  if (last_structure_) {
+    QMessageBox::information(
+        this, "GameX",
+        "Знімки M1–M4 для формул працюють після звичайного пошуку числа, "
+        "не після пошуку структури.");
+    return;
+  }
   std::string error;
-  const auto type = static_cast<ValueType>(type_combo_->currentData().toInt());
-  const auto endian = static_cast<Endian>(endian_combo_->currentData().toInt());
-  if (!dumps_.capture_hits(slot, *scanner_, *memory_, type, endian, &error)) {
+  if (!dumps_.capture_hits(slot, *scanner_, *memory_, last_scan_type_,
+                           last_scan_endian_, &error)) {
     QMessageBox::warning(this, "GameX", QString::fromStdString(error));
     return;
   }
+  update_dump_indicators();
   write_status(QString("Знімок M%1: %2 адрес")
                    .arg(slot + 1)
                    .arg(static_cast<qulonglong>(dumps_.size(slot))));
+}
+
+void MainWindow::update_dump_indicators() {
+  for (int i = 0; i < kDumpSlots; ++i) {
+    QPushButton *button = dump_buttons_[static_cast<std::size_t>(i)];
+    if (button == nullptr) {
+      continue;
+    }
+    const bool ready = dumps_.has_slot(i);
+    const std::size_t count = dumps_.size(i);
+    button->setText(ready ? QString("M%1✓").arg(i + 1)
+                          : QString("M%1").arg(i + 1));
+    button->setToolTip(
+        ready ? QString("Знімок M%1: %2 адрес (клік — перезаписати)")
+                    .arg(i + 1)
+                    .arg(static_cast<qulonglong>(count))
+              : QString("Зберегти поточні значення збігів як знімок M%1")
+                    .arg(i + 1));
+  }
 }
 
 void MainWindow::refine_by_formula() {
@@ -1467,10 +1660,9 @@ void MainWindow::refine_by_formula() {
     return;
   }
   std::string error;
-  const auto type = static_cast<ValueType>(type_combo_->currentData().toInt());
-  const auto endian = static_cast<Endian>(endian_combo_->currentData().toInt());
   const ScanStatus status = dumps_.refine_formula(
-      *scanner_, *memory_, type, endian, formula.toStdString(), &error);
+      *scanner_, *memory_, last_scan_type_, last_scan_endian_,
+      formula.toStdString(), &error);
   if (!status.ok) {
     QMessageBox::warning(this, "GameX", QString::fromStdString(status.message));
     return;
@@ -1576,10 +1768,16 @@ void MainWindow::set_scanning(bool scanning) {
 }
 
 void MainWindow::detach_process(const QString &reason) {
-  stop_scan();
+  wait_for_scan_thread();
+  set_scanning(false);
   scanner_.reset();
   memory_.reset();
   limit_region_ = false;
+  dumps_.clear();
+  update_dump_indicators();
+  if (emulator_ram_label_ != nullptr) {
+    emulator_ram_label_->setText("RAM: —");
+  }
   process_label_->setText("Процес не обрано");
   region_label_->setText("Область: увесь процес");
   results_->setRowCount(0);
@@ -1623,6 +1821,10 @@ void MainWindow::on_scan_completed() {
         QString("Знімок %1 МБ. Змініть значення в грі і натисніть Відсіяти.")
             .arg(static_cast<double>(status.scanned) / (1024.0 * 1024.0), 0,
                  'f', 1);
+  } else if (last_structure_) {
+    message = QString("Структура «%1»: %2 баз")
+                  .arg(QString::fromStdString(last_structure_->name))
+                  .arg(static_cast<qulonglong>(status.hit_count));
   } else {
     message =
         QString("Знайдено %1").arg(static_cast<qulonglong>(status.hit_count));

@@ -21,10 +21,11 @@ enum class WatchKind {
 struct WatchHit {
   pid_t tid = -1;
   std::uintptr_t data_address = 0;
-  std::uintptr_t instruction = 0;  // RIP після інструкції, що зробила запис
-  std::vector<std::byte> bytes;    // байти біля RIP
-  std::string disasm;              // Capstone або порожньо
-  int slot = -1;                   // DR0..DR3
+  // На x86_64 data breakpoint зупиняє *після* запису — це адреса наступної insn.
+  std::uintptr_t instruction = 0;
+  std::vector<std::byte> bytes;  // байти біля RIP (наступної інструкції)
+  std::string disasm;            // Capstone або порожньо
+  int slot = -1;                 // DR0..DR3
 };
 
 // Сесія ptrace: апаратні watchpoint на x86_64 (DR0..DR3).
@@ -68,6 +69,8 @@ private:
   };
 
   bool attach_tid(pid_t tid, std::string* error);
+  bool set_trace_options(pid_t tid, std::string* error);
+  bool adopt_new_thread(pid_t tid, std::string* error);
   bool apply_debug_regs(pid_t tid, std::string* error);
   bool read_regs(pid_t tid, std::uintptr_t* rip, std::string* error) const;
   bool read_insn_bytes(pid_t tid, std::uintptr_t rip, std::vector<std::byte>* out,

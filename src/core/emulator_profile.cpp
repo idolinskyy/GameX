@@ -40,26 +40,81 @@ std::int64_t size_distance(const MemoryRegion &region,
   return size >= hint ? size - hint : hint - size;
 }
 
+GuestRamMapping mapping_from(const MemoryRegion &region) {
+  GuestRamMapping map;
+  map.host_base = region.start;
+  map.host_end = region.end;
+  map.pathname = region.pathname;
+  return map;
+}
+
+std::vector<const MemoryRegion *>
+collect_candidates(const ProcessMemory &memory, const EmulatorProfile &profile,
+                   bool require_overlap, std::uintptr_t prefer_start,
+                   std::uintptr_t prefer_end, bool require_path) {
+  std::vector<const MemoryRegion *> candidates;
+  for (const MemoryRegion &region : memory.regions()) {
+    if (!region.readable || !region.writable) {
+      continue;
+    }
+    if (region.special_kernel()) {
+      continue;
+    }
+    if (require_path && !path_matches(region, profile)) {
+      continue;
+    }
+    if (!size_matches(region, profile)) {
+      continue;
+    }
+    if (require_overlap) {
+      if (region.end <= prefer_start || region.start >= prefer_end) {
+        continue;
+      }
+    }
+    candidates.push_back(&region);
+  }
+  return candidates;
+}
+
+void sort_candidates(std::vector<const MemoryRegion *> &candidates,
+                     const EmulatorProfile &profile) {
+  std::sort(candidates.begin(), candidates.end(),
+            [&](const MemoryRegion *a, const MemoryRegion *b) {
+              const auto da = size_distance(*a, profile);
+              const auto db = size_distance(*b, profile);
+              if (da != db) {
+                return da < db;
+              }
+              const bool a_named = !a->pathname.empty();
+              const bool b_named = !b->pathname.empty();
+              if (a_named != b_named) {
+                return a_named;
+              }
+              return a->start < b->start;
+            });
+}
+
 } // namespace
 
 std::vector<EmulatorProfile> builtin_emulator_profiles() {
   std::vector<EmulatorProfile> list;
+  // path_contains — м'яка підказка; якщо нічого не знайдено, пошук без фільтра.
   list.push_back(
-      {"nes", "NES (2 КіБ WRAM)", "", 2ull * 1024, 0, 0x0000, Endian::Little});
-  list.push_back({"snes", "SNES (128 КіБ WRAM)", "", 128ull * 1024, 4096,
+      {"nes", "NES (2 КіБ WRAM)", "mesen", 2ull * 1024, 0, 0x0000, Endian::Little});
+  list.push_back({"snes", "SNES (128 КіБ WRAM)", "snes9x", 128ull * 1024, 4096,
                   0x7E0000, Endian::Little});
-  list.push_back({"gba", "GBA (256 КіБ EWRAM)", "", 256ull * 1024, 0,
+  list.push_back({"gba", "GBA (256 КіБ EWRAM)", "mgba", 256ull * 1024, 0,
                   0x02000000, Endian::Little});
-  list.push_back({"nds", "NDS (4 МіБ main RAM)", "", 4ull * 1024 * 1024, 0,
+  list.push_back({"nds", "NDS (4 МіБ main RAM)", "melon", 4ull * 1024 * 1024, 0,
                   0x02000000, Endian::Little});
-  list.push_back({"ps1", "PS1 (2 МіБ RAM)", "", 2ull * 1024 * 1024, 0,
+  list.push_back({"ps1", "PS1 (2 МіБ RAM)", "duckstation", 2ull * 1024 * 1024, 0,
                   0x80000000, Endian::Little});
-  list.push_back({"n64", "N64 (4 МіБ RDRAM)", "", 4ull * 1024 * 1024, 0,
+  list.push_back({"n64", "N64 (4 МіБ RDRAM)", "mupen", 4ull * 1024 * 1024, 0,
                   0x80000000, Endian::Big});
-  list.push_back({"n64_8m", "N64 (8 МіБ RDRAM)", "", 8ull * 1024 * 1024, 0,
+  list.push_back({"n64_8m", "N64 (8 МіБ RDRAM)", "mupen", 8ull * 1024 * 1024, 0,
                   0x80000000, Endian::Big});
-  list.push_back({"genesis", "Mega Drive (64 КіБ 68k RAM)", "", 64ull * 1024, 0,
-                  0xFF0000, Endian::Big});
+  list.push_back({"genesis", "Mega Drive (64 КіБ 68k RAM)", "gens", 64ull * 1024,
+                  0, 0xFF0000, Endian::Big});
   return list;
 }
 
@@ -74,42 +129,46 @@ const EmulatorProfile *find_emulator_profile(std::string_view id) {
   return nullptr;
 }
 
+std::vector<GuestRamMapping>
+find_guest_ram_candidates(const ProcessMemory &memory,
+                          const EmulatorProfile &profile,
+                          std::uintptr_t prefer_start,
+                          std::uintptr_t prefer_end) {
+  const bool prefer = prefer_end > prefer_start;
+  auto try_collect = [&](bool require_path) {
+    auto candidates = prefer ? collect_candidates(memory, profile, true,
+                                                  prefer_start, prefer_end,
+                                                  require_path)
+                             : collect_candidates(memory, profile, false, 0, 0,
+                                                  require_path);
+    if (candidates.empty() && prefer) {
+      candidates = collect_candidates(memory, profile, false, 0, 0, require_path);
+    }
+    return candidates;
+  };
+
+  auto candidates = try_collect(!profile.path_contains.empty());
+  // Якщо path hint нічого не дав — шукаємо без нього (RetroArch тощо).
+  if (candidates.empty() && !profile.path_contains.empty()) {
+    candidates = try_collect(false);
+  }
+  sort_candidates(candidates, profile);
+
+  std::vector<GuestRamMapping> result;
+  result.reserve(candidates.size());
+  for (const MemoryRegion *region : candidates) {
+    result.push_back(mapping_from(*region));
+  }
+  return result;
+}
+
 std::optional<GuestRamMapping> locate_guest_ram(const ProcessMemory &memory,
                                                 const EmulatorProfile &profile,
                                                 std::string *error,
                                                 std::uintptr_t prefer_start,
                                                 std::uintptr_t prefer_end) {
-  const bool prefer = prefer_end > prefer_start;
-  auto collect = [&](bool require_overlap) {
-    std::vector<const MemoryRegion *> candidates;
-    for (const MemoryRegion &region : memory.regions()) {
-      if (!region.readable || !region.writable) {
-        continue;
-      }
-      if (region.special_kernel()) {
-        continue;
-      }
-      if (!path_matches(region, profile)) {
-        continue;
-      }
-      if (!size_matches(region, profile)) {
-        continue;
-      }
-      if (require_overlap) {
-        if (region.end <= prefer_start || region.start >= prefer_end) {
-          continue;
-        }
-      }
-      candidates.push_back(&region);
-    }
-    return candidates;
-  };
-
-  auto candidates = prefer ? collect(true) : collect(false);
-  if (candidates.empty() && prefer) {
-    candidates = collect(false);
-  }
-
+  const auto candidates = find_guest_ram_candidates(
+      memory, profile, prefer_start, prefer_end);
   if (candidates.empty()) {
     if (error) {
       *error = "Не знайдено регіон гостьової RAM для профілю «" +
@@ -119,23 +178,7 @@ std::optional<GuestRamMapping> locate_guest_ram(const ProcessMemory &memory,
     }
     return std::nullopt;
   }
-
-  std::sort(candidates.begin(), candidates.end(),
-            [&](const MemoryRegion *a, const MemoryRegion *b) {
-              const auto da = size_distance(*a, profile);
-              const auto db = size_distance(*b, profile);
-              if (da != db) {
-                return da < db;
-              }
-              return a->start < b->start;
-            });
-
-  const MemoryRegion &best = *candidates.front();
-  GuestRamMapping map;
-  map.host_base = best.start;
-  map.host_end = best.end;
-  map.pathname = best.pathname;
-  return map;
+  return candidates.front();
 }
 
 std::optional<std::uintptr_t> guest_to_host(const GuestRamMapping &map,

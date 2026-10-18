@@ -28,26 +28,34 @@ struct GuestRamMapping {
   std::uintptr_t host_base = 0;
   std::uintptr_t host_end = 0;
   std::string pathname;
-  std::uint64_t size() const { return host_end > host_base ? host_end - host_base : 0; }
+  std::uint64_t size() const {
+    return host_end > host_base ? host_end - host_base : 0;
+  }
 };
 
 std::vector<EmulatorProfile> builtin_emulator_profiles();
-const EmulatorProfile* find_emulator_profile(std::string_view id);
+const EmulatorProfile *find_emulator_profile(std::string_view id);
 
-// Шукає rw-регіон під профіль: path_contains, size_hint±tolerance.
-// Якщо prefer_end > prefer_start — спочатку серед регіонів, що перетинають цей діапазон.
-std::optional<GuestRamMapping> locate_guest_ram(const ProcessMemory& memory,
-                                                const EmulatorProfile& profile,
-                                                std::string* error,
+// Усі rw-кандидати під профіль (відсортовані: ближчі до size_hint першими).
+std::vector<GuestRamMapping>
+find_guest_ram_candidates(const ProcessMemory &memory,
+                          const EmulatorProfile &profile,
+                          std::uintptr_t prefer_start = 0,
+                          std::uintptr_t prefer_end = 0);
+
+// Best-effort: перший кандидат. Для UI з кількома збігами — find_guest_ram_candidates.
+std::optional<GuestRamMapping> locate_guest_ram(const ProcessMemory &memory,
+                                                const EmulatorProfile &profile,
+                                                std::string *error,
                                                 std::uintptr_t prefer_start = 0,
                                                 std::uintptr_t prefer_end = 0);
 
-std::optional<std::uintptr_t> guest_to_host(const GuestRamMapping& map,
-                                            const EmulatorProfile& profile,
+std::optional<std::uintptr_t> guest_to_host(const GuestRamMapping &map,
+                                            const EmulatorProfile &profile,
                                             std::uintptr_t guest_address);
 
-std::optional<std::uintptr_t> host_to_guest(const GuestRamMapping& map,
-                                            const EmulatorProfile& profile,
+std::optional<std::uintptr_t> host_to_guest(const GuestRamMapping &map,
+                                            const EmulatorProfile &profile,
                                             std::uintptr_t host_address);
 
-}  // namespace gamex
+} // namespace gamex

@@ -18,11 +18,12 @@ WatchDialog::WatchDialog(pid_t pid, std::uintptr_t address, std::size_t size,
   setWindowTitle("Хто пише адресу");
   resize(640, 420);
 
-  auto *warn =
-      new QLabel("Процес буде призупинено на час очікування і зупинки. "
-                 "Працює лише для процесу, запущеного з GameX (ptrace). "
-                 "Заміну інструкцій на NOP ця версія не робить.",
-                 this);
+  auto *warn = new QLabel(
+      "Процес працює під ptrace і зупиняється на хіті. Лише процес, запущений "
+      "з GameX. На x86_64 RIP у звіті — адреса наступної інструкції після "
+      "запису (не самої insn, що писала). Нові потоки підхоплюються через "
+      "TRACECLONE. Заміну на NOP ця версія не робить.",
+      this);
   warn->setWordWrap(true);
   warn->setStyleSheet("color: #a04000;");
 
@@ -34,8 +35,9 @@ WatchDialog::WatchDialog(pid_t pid, std::uintptr_t address, std::size_t size,
 
   log_ = new QPlainTextEdit(this);
   log_->setReadOnly(true);
-  log_->setPlaceholderText("Тут з'являться RIP, байти інструкції та мнемоніка "
-                           "(якщо зібрано з Capstone).");
+  log_->setPlaceholderText(
+      "HIT: data + rip (після запису), байти наступної insn, мнемоніка "
+      "(Capstone).");
 
   wait_button_ = new QPushButton("Чекати запис", this);
   stop_button_ = new QPushButton("Стоп", this);
@@ -110,19 +112,21 @@ void WatchDialog::show_hit(const WatchHit &hit) {
   for (std::byte b : hit.bytes) {
     bytes += QString("%1 ").arg(static_cast<unsigned>(b), 2, 16, QChar('0'));
   }
-  QString line = QString("HIT tid=%1 data=0x%2 rip=0x%3\n  bytes: %4")
-                     .arg(hit.tid)
-                     .arg(static_cast<qulonglong>(hit.data_address), 0, 16)
-                     .arg(static_cast<qulonglong>(hit.instruction), 0, 16)
-                     .arg(bytes.trimmed());
+  QString line =
+      QString("HIT tid=%1 data=0x%2 rip(після запису)=0x%3\n  bytes: %4")
+          .arg(hit.tid)
+          .arg(static_cast<qulonglong>(hit.data_address), 0, 16)
+          .arg(static_cast<qulonglong>(hit.instruction), 0, 16)
+          .arg(bytes.trimmed());
   if (!hit.disasm.empty()) {
     line += QString("\n  %1").arg(QString::fromStdString(hit.disasm));
   } else {
     line += "\n  (мнемоніка: зберіть з Capstone, зараз лише байти)";
   }
   append_log(line);
-  status_->setText(QString("Зупинено на RIP 0x%1. Процес на паузі.")
-                       .arg(static_cast<qulonglong>(hit.instruction), 0, 16));
+  status_->setText(
+      QString("Зупинено після запису; наступна insn @ 0x%1. Процес на паузі.")
+          .arg(static_cast<qulonglong>(hit.instruction), 0, 16));
   set_busy(false);
 }
 

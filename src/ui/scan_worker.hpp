@@ -1,11 +1,13 @@
 #pragma once
 
 #include "core/scanner.hpp"
+#include "core/structure.hpp"
 
 #include <QObject>
 
 #include <atomic>
 #include <mutex>
+#include <optional>
 
 namespace gamex {
 
@@ -15,7 +17,8 @@ class ScanWorker : public QObject {
 public:
   ScanWorker(Scanner *scanner, ScanQuery query, bool refine,
              std::atomic<bool> *cancel, ScanStatus *status,
-             std::mutex *status_mutex);
+             std::mutex *status_mutex,
+             std::optional<StructureTemplate> structure = std::nullopt);
 
 public slots:
   void start();
@@ -31,6 +34,7 @@ private:
   std::atomic<bool> *cancel_ = nullptr;
   ScanStatus *status_ = nullptr;
   std::mutex *status_mutex_ = nullptr;
+  std::optional<StructureTemplate> structure_;
 };
 
 } // namespace gamex

@@ -38,6 +38,7 @@ public:
 
   pid_t pid() const { return pid_; }
   bool valid() const;
+  // True only while the same process identity (pid + starttime) still exists.
   bool alive() const;
 
   std::vector<MemoryRegion> regions() const;
@@ -51,6 +52,8 @@ public:
 
 private:
   pid_t pid_ = -1;
+  // /proc/<pid>/stat starttime — захист від повторного використання PID.
+  unsigned long long starttime_ = 0;
   mutable std::mutex mutex_;
   mutable std::string last_error_;
 };
@@ -58,5 +61,6 @@ private:
 std::vector<ProcessInfo> list_processes();
 std::string executable_path(pid_t pid);
 std::string ptrace_scope();
+std::optional<unsigned long long> process_starttime(pid_t pid);
 
 } // namespace gamex

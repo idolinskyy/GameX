@@ -7,10 +7,12 @@
 #include "core/process_memory.hpp"
 #include "core/scanner.hpp"
 #include "core/structure.hpp"
+#include "core/value_codec.hpp"
 
 #include <QMainWindow>
 #include <QTableWidget>
 
+#include <array>
 #include <atomic>
 #include <memory>
 #include <mutex>
@@ -63,6 +65,9 @@ private:
   void launch_process();
   void attach_pid(pid_t pid, const QString &title);
   void run_scan(bool refine);
+  void start_scan_worker(ScanQuery query, bool refine,
+                         std::optional<StructureTemplate> structure);
+  void wait_for_scan_thread();
   void reset_scan();
   void add_selected_hit();
   void remove_selected_entries();
@@ -81,6 +86,7 @@ private:
   void show_entries();
   void apply_group_filter();
   void update_value_fields();
+  void update_dump_indicators();
   void write_status(const QString &text);
   void setup_shortcuts();
   void toggle_freeze_selected();
@@ -97,12 +103,14 @@ private:
   void open_help();
   void on_emulator_changed();
   void detect_emulator_ram();
-  const EmulatorProfile* current_emulator() const;
-  bool bind_entry_to_emulator(AddressEntry& entry, std::uintptr_t host_address,
-                              std::string* error);
+  const EmulatorProfile *current_emulator() const;
+  bool bind_entry_to_emulator(AddressEntry &entry, std::uintptr_t host_address,
+                              std::string *error);
+  bool try_enable_hold(AddressEntry &entry, std::string *error);
   std::size_t resolve_addresses();
   std::vector<int> selected_entry_rows() const;
   void install_mode_combo(int row, FreezeMode mode);
+  QString format_hit_value(const ScanHit &hit) const;
 
   QLineEdit *value_edit_ = nullptr;
   QLineEdit *upper_edit_ = nullptr;
@@ -125,6 +133,7 @@ private:
   QPushButton *scan_button_ = nullptr;
   QPushButton *refine_button_ = nullptr;
   QPushButton *stop_button_ = nullptr;
+  std::array<QPushButton *, kDumpSlots> dump_buttons_{};
   QProgressBar *progress_ = nullptr;
   QTableWidget *results_ = nullptr;
   GamexTable *table_ = nullptr;
@@ -138,6 +147,8 @@ private:
   DumpBook dumps_;
   Freezer freezer_;
   std::optional<StructureTemplate> last_structure_;
+  ValueType last_scan_type_ = ValueType::Int32;
+  Endian last_scan_endian_ = Endian::Little;
   ScanStatus last_status_;
   std::mutex status_mutex_;
   std::atomic<bool> cancel_{false};

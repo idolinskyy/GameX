@@ -90,6 +90,51 @@ unsigned long WatchSession::build_dr7() const {
   return dr7;
 }
 
+bool WatchSession::set_trace_options(pid_t tid, std::string *error) {
+  const unsigned long opts = static_cast<unsigned long>(
+      PTRACE_O_TRACECLONE | PTRACE_O_TRACEFORK | PTRACE_O_TRACEVFORK);
+  if (::ptrace(PTRACE_SETOPTIONS, tid, nullptr,
+               reinterpret_cast<void *>(opts)) != 0) {
+    if (error) {
+      *error = errno_message("ptrace(SETOPTIONS)");
+    }
+    return false;
+  }
+  return true;
+}
+
+bool WatchSession::adopt_new_thread(pid_t tid, std::string *error) {
+  if (tid <= 0) {
+    return false;
+  }
+  for (pid_t existing : tids_) {
+    if (existing == tid) {
+      return true;
+    }
+  }
+  int status = 0;
+  if (::waitpid(tid, &status, __WALL) < 0) {
+    if (error) {
+      *error = errno_message("waitpid нового потоку");
+    }
+    return false;
+  }
+  if (!set_trace_options(tid, error)) {
+    return false;
+  }
+  if (!apply_debug_regs(tid, error)) {
+    return false;
+  }
+  tids_.push_back(tid);
+  if (::ptrace(PTRACE_CONT, tid, nullptr, nullptr) != 0) {
+    if (error) {
+      *error = errno_message("ptrace(CONT) новий потік");
+    }
+    return false;
+  }
+  return true;
+}
+
 bool WatchSession::attach_tid(pid_t tid, std::string *error) {
   if (::ptrace(PTRACE_ATTACH, tid, nullptr, nullptr) != 0) {
     if (error) {
@@ -109,6 +154,10 @@ bool WatchSession::attach_tid(pid_t tid, std::string *error) {
     if (error) {
       *error = "Потік не зупинився після attach";
     }
+    ::ptrace(PTRACE_DETACH, tid, nullptr, nullptr);
+    return false;
+  }
+  if (!set_trace_options(tid, error)) {
     ::ptrace(PTRACE_DETACH, tid, nullptr, nullptr);
     return false;
   }
@@ -456,6 +505,23 @@ std::optional<WatchHit> WatchSession::wait_hit(int timeout_ms,
     }
     stopped_ = true;
     const int sig = WSTOPSIG(status);
+    const unsigned event = static_cast<unsigned>(status) >> 16;
+    if (sig == SIGTRAP &&
+        (event == PTRACE_EVENT_CLONE || event == PTRACE_EVENT_FORK ||
+         event == PTRACE_EVENT_VFORK)) {
+      unsigned long new_tid = 0;
+      if (::ptrace(PTRACE_GETEVENTMSG, tid, nullptr, &new_tid) == 0) {
+        adopt_new_thread(static_cast<pid_t>(new_tid), nullptr);
+      }
+      if (::ptrace(PTRACE_CONT, tid, nullptr, nullptr) != 0) {
+        if (error) {
+          *error = errno_message("ptrace(CONT) після clone");
+        }
+        return std::nullopt;
+      }
+      stopped_ = false;
+      continue;
+    }
     if (sig != SIGTRAP && sig != SIGSTOP) {
       // Пересилаємо чужий сигнал і продовжуємо.
       ::ptrace(PTRACE_CONT, tid, nullptr,
@@ -473,7 +539,10 @@ std::optional<WatchHit> WatchSession::wait_hit(int timeout_ms,
       stopped_ = false;
       continue;
     }
-    // SIGSTOP без DR — лишаємось зупиненими.
+    // SIGSTOP без DR — відновлюємо, щоб не лишити процес на паузі.
+    if (::ptrace(PTRACE_CONT, tid, nullptr, nullptr) == 0) {
+      stopped_ = false;
+    }
     if (error) {
       *error = "Процес зупинено без спрацювання watchpoint";
     }
