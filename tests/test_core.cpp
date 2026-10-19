@@ -190,6 +190,27 @@ void test_self_memory() {
   }
   expect(found, "increased filter keeps the slot");
 
+  *slot = needle + 1 + 7;
+  gamex::ScanQuery grew_by;
+  grew_by.type = gamex::ValueType::Int32;
+  grew_by.endian = gamex::Endian::Little;
+  grew_by.op = gamex::CompareOp::IncreasedBy;
+  grew_by.alignment = 4;
+  auto delta7 = gamex::encode_text(gamex::ValueType::Int32,
+                                   gamex::Endian::Little, "7", nullptr);
+  expect(static_cast<bool>(delta7), "encode delta 7");
+  grew_by.value = *delta7;
+  const auto refined_by = scanner.refine(grew_by);
+  expect(refined_by.ok,
+         refined_by.message.empty() ? "refine by" : refined_by.message);
+  found = false;
+  for (const auto &hit : scanner.hits()) {
+    if (hit.address == reinterpret_cast<std::uintptr_t>(slot.get())) {
+      found = true;
+    }
+  }
+  expect(found, "increased-by filter keeps the slot");
+
   gamex::AddressEntry entry;
   entry.address = reinterpret_cast<std::uintptr_t>(slot.get());
   entry.type = gamex::ValueType::Int32;

@@ -21,6 +21,7 @@
 class QAction;
 class QCheckBox;
 class QComboBox;
+class QGroupBox;
 class QLabel;
 class QLineEdit;
 class QProcess;
@@ -29,6 +30,8 @@ class QPushButton;
 class QSpinBox;
 class QThread;
 class QTimer;
+class QToolButton;
+class QWidget;
 
 class GamexTable : public QTableWidget {
 public:
@@ -87,6 +90,7 @@ private:
   void detach_process(const QString &reason);
   ScanQuery current_query(std::string *error) const;
   void show_hits();
+  void refresh_hit_values();
   void show_entries();
   void apply_group_filter();
   void update_value_fields();
@@ -95,6 +99,7 @@ private:
   bool scan_session_active() const;
   bool can_refine_scan() const;
   void write_status(const QString &text);
+  void note_value_written(const QString &detail);
   void toggle_freeze_selected();
   void set_value_selected();
   void cycle_freeze_mode_selected();
@@ -133,6 +138,9 @@ private:
   QSpinBox *alignment_ = nullptr;
   QSpinBox *max_region_mib_ = nullptr;
   QCheckBox *writable_only_ = nullptr;
+  QToolButton *search_more_button_ = nullptr;
+  QWidget *search_advanced_ = nullptr;
+  QGroupBox *dump_box_ = nullptr;
   QLabel *process_label_ = nullptr;
   QLabel *region_label_ = nullptr;
   QLabel *hits_hint_ = nullptr;

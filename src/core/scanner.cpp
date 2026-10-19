@@ -1,6 +1,8 @@
 #include "core/scanner.hpp"
 
 #include <algorithm>
+#include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <optional>
 #include <utility>
@@ -137,6 +139,43 @@ bool matches_previous(const ScanQuery &query, const std::byte *previous,
     const int order = compare_numbers(*now, *before);
     return query.op == CompareOp::Increased ? order > 0 : order < 0;
   }
+  case CompareOp::IncreasedBy:
+  case CompareOp::DecreasedBy: {
+    const auto before = decode_number(
+        query.type, query.endian, std::span<const std::byte>(previous, width));
+    const auto now = decode_number(query.type, query.endian,
+                                   std::span<const std::byte>(data, width));
+    const auto delta =
+        decode_number(query.type, query.endian, query.value.bytes);
+    if (!before || !now || !delta) {
+      return false;
+    }
+    const int order = compare_numbers(*now, *before);
+    if (query.op == CompareOp::IncreasedBy && order <= 0) {
+      return false;
+    }
+    if (query.op == CompareOp::DecreasedBy && order >= 0) {
+      return false;
+    }
+    Number diff;
+    if (before->is_float || now->is_float || delta->is_float) {
+      diff.is_float = true;
+      diff.is_signed = true;
+      diff.real = std::abs(now->real - before->real);
+      return std::abs(diff.real - delta->real) <=
+             1e-6 * std::max(1.0, std::abs(delta->real));
+    }
+    if (!before->is_signed && !now->is_signed && !delta->is_signed) {
+      diff.is_signed = false;
+      const auto hi = std::max(now->uinteger, before->uinteger);
+      const auto lo = std::min(now->uinteger, before->uinteger);
+      diff.uinteger = hi - lo;
+      return diff.uinteger == delta->uinteger;
+    }
+    diff.is_signed = true;
+    diff.integer = std::llabs(now->integer - before->integer);
+    return diff.integer == delta->integer;
+  }
   default:
     return matches_current(query, data, width);
   }
@@ -144,6 +183,7 @@ bool matches_previous(const ScanQuery &query, const std::byte *previous,
 
 bool relative_op(CompareOp op) {
   return op == CompareOp::Increased || op == CompareOp::Decreased ||
+         op == CompareOp::IncreasedBy || op == CompareOp::DecreasedBy ||
          op == CompareOp::Changed || op == CompareOp::Unchanged;
 }
 
@@ -584,7 +624,10 @@ ScanStatus Scanner::refine(const ScanQuery &query, const ScanControl &control) {
     status.message = "Ширина значення не збігається з попереднім пошуком";
     return status;
   }
-  if (!relative_op(query.op) && query.value.bytes.size() != width) {
+  const bool needs_value = !relative_op(query.op) ||
+                           query.op == CompareOp::IncreasedBy ||
+                           query.op == CompareOp::DecreasedBy;
+  if (needs_value && query.value.bytes.size() != width) {
     ScanStatus status;
     status.message = "Значення не зібране";
     return status;
@@ -663,8 +706,10 @@ ScanStatus Scanner::refine_snapshot(const ScanQuery &query,
     status.message = "Порожнє значення або нульове вирівнювання";
     return status;
   }
-  if (!relative_op(query.op) && query.op != CompareOp::NotEqual &&
-      query.value.bytes.size() != width) {
+  const bool needs_value =
+      (!relative_op(query.op) && query.op != CompareOp::NotEqual) ||
+      query.op == CompareOp::IncreasedBy || query.op == CompareOp::DecreasedBy;
+  if (needs_value && query.value.bytes.size() != width) {
     status.message = "Значення не зібране";
     return status;
   }
@@ -675,6 +720,12 @@ ScanStatus Scanner::refine_snapshot(const ScanQuery &query,
   if (!is_fixed_width(query.type) && relative_op(query.op) &&
       query.op != CompareOp::Changed && query.op != CompareOp::Unchanged) {
     status.message = "Для рядка доступні умови «змінилось» і «не змінилось»";
+    return status;
+  }
+  if ((query.op == CompareOp::IncreasedBy ||
+       query.op == CompareOp::DecreasedBy) &&
+      !is_fixed_width(query.type)) {
+    status.message = "«Зросло/зменшилось на» лише для числових типів";
     return status;
   }
 

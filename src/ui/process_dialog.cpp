@@ -54,6 +54,11 @@ ProcessDialog::ProcessDialog(QWidget *parent) : QDialog(parent) {
   note->setWordWrap(true);
   note->setStyleSheet("color: #888;");
 
+  empty_hint_ = new QLabel(this);
+  empty_hint_->setWordWrap(true);
+  empty_hint_->setStyleSheet("color: #a06020;");
+  empty_hint_->setVisible(false);
+
   table_ = new QTableWidget(this);
   table_->setColumnCount(5);
   table_->setHorizontalHeaderLabels(
@@ -96,6 +101,7 @@ ProcessDialog::ProcessDialog(QWidget *parent) : QDialog(parent) {
   layout->addWidget(my_uid_only_);
   layout->addWidget(panel_only_);
   layout->addWidget(note);
+  layout->addWidget(empty_hint_);
   layout->addWidget(table_);
   layout->addWidget(buttons);
   reload();
@@ -158,6 +164,28 @@ void ProcessDialog::apply_filter() {
   }
   if (table_->rowCount() > 0) {
     table_->selectRow(0);
+    if (empty_hint_ != nullptr) {
+      empty_hint_->clear();
+      empty_hint_->setVisible(false);
+    }
+  } else if (empty_hint_ != nullptr) {
+    if (panel_only && panel_pids_.empty()) {
+      empty_hint_->setText(
+          "Фільтр панелі нічого не знайшов. Потрібен X11 або XWayland "
+          "(змінна DISPLAY). На чистому Wayland вимкніть "
+          "«Лише з панелі оболонки» або шукайте за назвою вище.");
+      empty_hint_->setVisible(true);
+    } else if (panel_only) {
+      empty_hint_->setText(
+          "Немає збігів із поточними фільтрами. Спробуйте вимкнути "
+          "«Лише з панелі» або «Лише мій користувач», або очистіть пошук.");
+      empty_hint_->setVisible(true);
+    } else {
+      empty_hint_->setText(
+          "Немає процесів за поточними фільтрами. Послабте умови або "
+          "натисніть «Оновити».");
+      empty_hint_->setVisible(true);
+    }
   }
 }
 

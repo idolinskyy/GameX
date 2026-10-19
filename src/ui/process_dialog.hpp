@@ -7,6 +7,7 @@
 #include <vector>
 
 class QCheckBox;
+class QLabel;
 class QLineEdit;
 class QTableWidget;
 
@@ -31,6 +32,7 @@ private:
   QCheckBox *login_users_only_ = nullptr;
   QCheckBox *my_uid_only_ = nullptr;
   QCheckBox *panel_only_ = nullptr;
+  QLabel *empty_hint_ = nullptr;
   QTableWidget *table_ = nullptr;
   std::vector<ProcessInfo> processes_;
   std::unordered_set<pid_t> panel_pids_;

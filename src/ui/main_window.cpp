@@ -44,6 +44,7 @@
 #include <QTableWidget>
 #include <QThread>
 #include <QTimer>
+#include <QToolButton>
 #include <QVBoxLayout>
 
 #include <QBrush>
@@ -171,6 +172,9 @@ void MainWindow::build_ui() {
   op_combo_->addItem("Діапазон", static_cast<int>(CompareOp::Between));
   op_combo_->addItem("Зросло", static_cast<int>(CompareOp::Increased));
   op_combo_->addItem("Зменшилось", static_cast<int>(CompareOp::Decreased));
+  op_combo_->addItem("Зросло на…", static_cast<int>(CompareOp::IncreasedBy));
+  op_combo_->addItem("Зменшилось на…",
+                     static_cast<int>(CompareOp::DecreasedBy));
   op_combo_->addItem("Змінилось", static_cast<int>(CompareOp::Changed));
   op_combo_->addItem("Не змінилось", static_cast<int>(CompareOp::Unchanged));
   op_combo_->setCurrentIndex(0);
@@ -230,7 +234,8 @@ void MainWindow::build_ui() {
   process_row->addWidget(region_label_);
 
   auto *search_box = new QGroupBox("2. Пошук у пам'яті", this);
-  auto *search_grid = new QGridLayout(search_box);
+  auto *search_layout = new QVBoxLayout(search_box);
+  auto *search_grid = new QGridLayout();
   search_grid->addWidget(value_label_, 0, 0);
   search_grid->addWidget(value_edit_, 0, 1);
   search_grid->addWidget(upper_label_, 0, 2);
@@ -239,23 +244,47 @@ void MainWindow::build_ui() {
   search_grid->addWidget(type_combo_, 0, 5);
   search_grid->addWidget(new QLabel("Умова", this), 0, 6);
   search_grid->addWidget(op_combo_, 0, 7);
+  search_grid->setColumnStretch(1, 1);
 
-  search_grid->addWidget(new QLabel("Порядок байтів", this), 1, 0);
-  search_grid->addWidget(endian_combo_, 1, 1);
-  search_grid->addWidget(new QLabel("Крок адреси", this), 1, 2);
-  search_grid->addWidget(alignment_, 1, 3);
-  search_grid->addWidget(new QLabel("Макс. регіон", this), 1, 4);
-  search_grid->addWidget(max_region_mib_, 1, 5);
-  search_grid->addWidget(writable_only_, 1, 6);
+  search_advanced_ = new QWidget(search_box);
+  auto *advanced_grid = new QGridLayout(search_advanced_);
+  advanced_grid->setContentsMargins(0, 0, 0, 0);
+  advanced_grid->addWidget(new QLabel("Порядок байтів", search_advanced_), 0,
+                           0);
+  advanced_grid->addWidget(endian_combo_, 0, 1);
+  advanced_grid->addWidget(new QLabel("Крок адреси", search_advanced_), 0, 2);
+  advanced_grid->addWidget(alignment_, 0, 3);
+  advanced_grid->addWidget(new QLabel("Макс. регіон", search_advanced_), 0, 4);
+  advanced_grid->addWidget(max_region_mib_, 0, 5);
+  advanced_grid->addWidget(writable_only_, 0, 6);
+  search_advanced_->setVisible(false);
+
+  search_more_button_ = new QToolButton(search_box);
+  search_more_button_->setText("Ще параметри");
+  search_more_button_->setCheckable(true);
+  search_more_button_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+  search_more_button_->setArrowType(Qt::RightArrow);
+  search_more_button_->setToolTip(
+      "Порядок байтів, крок адреси, ліміт регіону, лише записувані");
+  connect(search_more_button_, &QToolButton::toggled, this, [this](bool on) {
+    if (search_advanced_ != nullptr) {
+      search_advanced_->setVisible(on);
+    }
+    if (search_more_button_ != nullptr) {
+      search_more_button_->setArrowType(on ? Qt::DownArrow : Qt::RightArrow);
+    }
+  });
 
   auto *actions = new QHBoxLayout();
   actions->addWidget(scan_button_);
   actions->addWidget(refine_button_);
   actions->addWidget(stop_button_);
   actions->addWidget(reset_button_);
+  actions->addWidget(search_more_button_);
   actions->addStretch();
-  search_grid->addLayout(actions, 2, 0, 1, 8);
-  search_grid->setColumnStretch(1, 1);
+  search_layout->addLayout(search_grid);
+  search_layout->addWidget(search_advanced_);
+  search_layout->addLayout(actions);
 
   results_ = new QTableWidget(this);
   results_->setColumnCount(2);
@@ -372,21 +401,26 @@ void MainWindow::build_ui() {
   bottom_layout->addWidget(group_filter_);
   bottom_layout->addWidget(table_);
   auto *table_buttons = new QHBoxLayout();
-  auto *dump_box = new QGroupBox(
-      "Знімки M1–M4 — порівняти кілька станів однією формулою", this);
-  dump_box->setToolTip(
-      "Окремо від звичайного «Відсіяти»: самі зберігаєте значення в M1…M4 "
+  dump_box_ = new QGroupBox(
+      "Знімки M1–M4 (розширений відсів) — увімкніть галочку", this);
+  dump_box_->setCheckable(true);
+  dump_box_->setChecked(false);
+  dump_box_->setToolTip(
+      "Окремо від звичайного «Відсіяти»: зберігаєте значення в M1…M4 "
       "у різні моменти, потім відсіваєте формулою.");
-  auto *dump_layout = new QVBoxLayout(dump_box);
+  auto *dump_layout = new QVBoxLayout(dump_box_);
+  auto *dump_content = new QWidget(dump_box_);
+  auto *dump_content_layout = new QVBoxLayout(dump_content);
+  dump_content_layout->setContentsMargins(0, 0, 0, 0);
   auto *dump_hint = new QLabel(
       "Після пошуку: M1 → змініть число в грі → M2 (далі M3/M4 за бажанням) → "
       "формула → «Відсіяти формулою». Для простих кроків досить звичайного "
-      "«Відсіяти» зверху.",
-      dump_box);
+      "«Відсіяти».",
+      dump_content);
   dump_hint->setWordWrap(true);
   dump_hint->setStyleSheet("color: #666;");
   auto *dump_row = new QHBoxLayout();
-  dump_row->addWidget(new QLabel("Зберегти:", dump_box));
+  dump_row->addWidget(new QLabel("Зберегти:", dump_content));
   for (QPushButton *button : dump_buttons_) {
     dump_row->addWidget(button);
   }
@@ -395,9 +429,11 @@ void MainWindow::build_ui() {
   dump_row->addWidget(formula_edit_, 1);
   dump_row->addWidget(formula_button);
   dump_row->addWidget(dump_help_button);
-  dump_layout->addWidget(dump_hint);
-  dump_layout->addLayout(dump_row);
-  bottom_layout->addWidget(dump_box);
+  dump_content_layout->addWidget(dump_hint);
+  dump_content_layout->addLayout(dump_row);
+  dump_layout->addWidget(dump_content);
+  dump_content->setVisible(false);
+  connect(dump_box_, &QGroupBox::toggled, dump_content, &QWidget::setVisible);
 
   table_buttons->addWidget(remove_button);
   table_buttons->addWidget(bind_button);
@@ -405,9 +441,9 @@ void MainWindow::build_ui() {
   table_buttons->addWidget(hex_button);
   table_buttons->addWidget(structure_button);
   table_buttons->addWidget(watch_button);
+  table_buttons->addStretch();
   table_buttons->addWidget(save_button);
   table_buttons->addWidget(load_button);
-  table_buttons->addStretch();
   bottom_layout->addLayout(table_buttons);
 
   auto *splitter = new QSplitter(Qt::Vertical, this);
@@ -421,6 +457,7 @@ void MainWindow::build_ui() {
   central_layout->setContentsMargins(8, 8, 8, 8);
   central_layout->addWidget(process_box);
   central_layout->addWidget(search_box);
+  central_layout->addWidget(dump_box_);
   central_layout->addWidget(progress_);
   central_layout->addWidget(splitter, 1);
   setCentralWidget(central);
@@ -908,11 +945,11 @@ ScanQuery MainWindow::current_query(std::string *error) const {
     query.region_end = region_end_;
   }
   query.skip_path = executable_path(static_cast<pid_t>(::getpid()));
-  const bool relative =
+  const bool no_value =
       query.op == CompareOp::Increased || query.op == CompareOp::Decreased ||
       query.op == CompareOp::Changed || query.op == CompareOp::Unchanged ||
       query.op == CompareOp::Unknown;
-  if (!relative) {
+  if (!no_value) {
     auto prepared = prepare_search_value(
         query.type, query.endian, value_edit_->text().toStdString(), error);
     if (!prepared) {
@@ -1095,8 +1132,9 @@ void MainWindow::show_hits() {
     return;
   }
   constexpr int kPreview = 5000;
-  const int rows = static_cast<int>(std::min<std::size_t>(
-      scanner_->hit_count(), static_cast<std::size_t>(kPreview)));
+  const std::size_t total = scanner_->hit_count();
+  const int rows =
+      static_cast<int>(std::min(total, static_cast<std::size_t>(kPreview)));
   results_->setRowCount(rows);
   const QString value_header =
       last_structure_ ? QString("Поля структури") : QString("Значення зараз");
@@ -1107,6 +1145,70 @@ void MainWindow::show_hits() {
     address->setData(Qt::UserRole, static_cast<qulonglong>(hit.address));
     results_->setItem(row, 0, address);
     results_->setItem(row, 1, new QTableWidgetItem(format_hit_value(hit)));
+  }
+  if (hits_hint_ != nullptr) {
+    if (total == 0) {
+      hits_hint_->setText(
+          "Збігів немає. Змініть умову або скиньте пошук і спробуйте знову.");
+    } else if (total > static_cast<std::size_t>(kPreview)) {
+      hits_hint_->setText(
+          QString("Показано перші %1 з %2 збігів. Подвійне клацання або "
+                  "«Додати обране ↓» — у таблицю редагування.")
+              .arg(kPreview)
+              .arg(static_cast<qulonglong>(total)));
+    } else {
+      hits_hint_->setText(
+          QString("Збігів: %1. Подвійне клацання або «Додати обране ↓» — "
+                  "у таблицю редагування.")
+              .arg(static_cast<qulonglong>(total)));
+    }
+  }
+}
+
+void MainWindow::refresh_hit_values() {
+  if (!scanner_ || !memory_ || !results_ || scanning_ || last_structure_) {
+    return;
+  }
+  if (!is_fixed_width(last_scan_type_)) {
+    return;
+  }
+  const int rows = results_->rowCount();
+  if (rows <= 0) {
+    return;
+  }
+  int first = 0;
+  int last = rows - 1;
+  if (auto *view = results_->viewport()) {
+    const QModelIndex top = results_->indexAt(view->rect().topLeft());
+    const QModelIndex bottom = results_->indexAt(view->rect().bottomLeft());
+    if (top.isValid()) {
+      first = top.row();
+    }
+    if (bottom.isValid()) {
+      last = bottom.row();
+    }
+  }
+  // Не більше ~128 читань за тик — щоб не гальмувати UI.
+  last = std::min(last, first + 127);
+  const std::size_t width = fixed_width(last_scan_type_);
+  std::vector<std::byte> bytes(width);
+  for (int row = first; row <= last; ++row) {
+    auto *addr_item = results_->item(row, 0);
+    auto *value_item = results_->item(row, 1);
+    if (addr_item == nullptr || value_item == nullptr) {
+      continue;
+    }
+    const auto address = static_cast<std::uintptr_t>(
+        addr_item->data(Qt::UserRole).toULongLong());
+    const auto io = memory_->read(address, bytes);
+    if (io.transferred != width) {
+      continue;
+    }
+    const QString text = QString::fromStdString(
+        decode_text(last_scan_type_, last_scan_endian_, bytes));
+    if (value_item->text() != text) {
+      value_item->setText(text);
+    }
   }
 }
 
@@ -1375,9 +1477,9 @@ void MainWindow::on_table_changed(QTableWidgetItem *item) {
       return;
     }
     entry.frozen_value = std::move(encoded->bytes);
-    write_status(QString("Записано %1 за адресою %2")
-                     .arg(item->text())
-                     .arg(hex_address(entry.address)));
+    note_value_written(QString("Записано %1 за адресою %2")
+                           .arg(item->text())
+                           .arg(hex_address(entry.address)));
   }
 }
 
@@ -1435,8 +1537,9 @@ void MainWindow::refresh_views() {
     return;
   }
   if (!memory_->alive()) {
-    statusBar()->showMessage(
-        "Процес завершився або PID зайнятий іншим процесом");
+    detach_process(
+        "Процес завершився або PID зайнятий іншим процесом — підключення "
+        "скинуто");
     return;
   }
   const FreezeTickStats freeze = freezer_.tick(*memory_, addresses_);
@@ -1448,6 +1551,7 @@ void MainWindow::refresh_views() {
             .arg(static_cast<qulonglong>(freeze.write_failures)),
         2000);
   }
+  refresh_hit_values();
   if (table_->is_editing()) {
     return;
   }
@@ -1489,10 +1593,18 @@ void MainWindow::update_value_fields() {
   value_edit_->setEnabled(needs_value);
   value_label_->setEnabled(needs_value);
   const bool refining = can_refine_scan();
+  const bool delta_op =
+      op == CompareOp::IncreasedBy || op == CompareOp::DecreasedBy;
   if (refining) {
-    value_label_->setText(needs_value ? "Нове значення" : "Умова відсіву");
+    if (delta_op) {
+      value_label_->setText("На скільки");
+    } else {
+      value_label_->setText(needs_value ? "Нове значення" : "Умова відсіву");
+    }
     if (op == CompareOp::Unknown) {
       value_edit_->setPlaceholderText("знімок уже є — оберіть іншу умову");
+    } else if (delta_op) {
+      value_edit_->setPlaceholderText("наприклад 10 — зміна рівно на 10");
     } else if (!needs_value) {
       value_edit_->setPlaceholderText(
           "змініть значення в грі, потім «Відсіяти»");
@@ -1503,6 +1615,8 @@ void MainWindow::update_value_fields() {
     value_label_->setText("Що шукати");
     if (op == CompareOp::Unknown) {
       value_edit_->setPlaceholderText("для першого знімка число не потрібне");
+    } else if (delta_op) {
+      value_edit_->setPlaceholderText("лише для відсіву після «Шукати»");
     } else if (!needs_value) {
       value_edit_->setPlaceholderText("для цієї умови число не потрібне");
     } else {
@@ -1512,6 +1626,12 @@ void MainWindow::update_value_fields() {
   const bool between = op == CompareOp::Between;
   upper_edit_->setVisible(between);
   upper_label_->setVisible(between);
+}
+
+void MainWindow::note_value_written(const QString &detail) {
+  write_status(detail +
+               " · Перевірте дію в грі: якщо відкотилось або логіка ігнорує — "
+               "могла бути копія для екрана.");
 }
 
 bool MainWindow::scan_session_active() const { return scan_session_; }
@@ -1721,7 +1841,7 @@ void MainWindow::set_value_selected() {
     ++written;
   }
   show_entries();
-  write_status(QString("F6: записано в %1 адрес(и)").arg(written));
+  note_value_written(QString("F6: записано в %1 адрес(и)").arg(written));
 }
 
 void MainWindow::cycle_freeze_mode_selected() {

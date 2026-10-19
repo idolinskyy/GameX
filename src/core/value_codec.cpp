@@ -301,6 +301,10 @@ std::string_view compare_op_name(CompareOp op) {
     return "increased";
   case CompareOp::Decreased:
     return "decreased";
+  case CompareOp::IncreasedBy:
+    return "increased-by";
+  case CompareOp::DecreasedBy:
+    return "decreased-by";
   case CompareOp::Changed:
     return "changed";
   case CompareOp::Unchanged:

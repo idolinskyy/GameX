@@ -41,6 +41,8 @@ enum class CompareOp {
   Between,
   Increased,
   Decreased,
+  IncreasedBy, // зросло рівно на value (відсів)
+  DecreasedBy, // зменшилось рівно на value (відсів)
   Changed,
   Unchanged,
   Unknown,
