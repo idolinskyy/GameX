@@ -20,6 +20,7 @@
 #include <QAction>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QCoreApplication>
 #include <QFileDialog>
 #include <QGridLayout>
 #include <QGroupBox>
@@ -33,10 +34,12 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QProcess>
+#include <QProcessEnvironment>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QSpinBox>
 #include <QSplitter>
+#include <QStandardPaths>
 #include <QStatusBar>
 #include <QTableWidget>
 #include <QThread>
@@ -82,17 +85,28 @@ MainWindow::~MainWindow() {
 }
 
 void MainWindow::build_ui() {
-  setWindowTitle("GameX");
+  if (elevated_privileges()) {
+    setWindowTitle("GameX (root)");
+  } else {
+    setWindowTitle("GameX");
+  }
   resize(1180, 760);
 
   auto *process_button = new QPushButton("Обрати процес", this);
   process_button->setToolTip(
       "Підключитись до вже запущеної програми. Без root на Ubuntu "
-      "(ptrace_scope=1) часто блокується — тоді краще «Запустити» або sudo.");
+      "(ptrace_scope=1) часто блокується — тоді краще «Запустити» або "
+      "«З правами root».");
   auto *launch_button = new QPushButton("Запустити", this);
   launch_button->setToolTip(
       "Стартувати гру як дочірній процес — основний шлях без root. "
       "На Ubuntu з ptrace_scope=1 це найнадійніше.");
+  auto *root_button = new QPushButton("З правами root", this);
+  root_button->setToolTip(
+      "Запустити ще один GameX з правами root (пароль через zenity/sudo). "
+      "Потрібно, щоб чіплятись до вже відкритих ігор при ptrace_scope=1. "
+      "Не тримайте root постійно без потреби.");
+  root_button->setEnabled(!elevated_privileges());
   auto *region_button = new QPushButton("Блок пам'яті", this);
   region_button->setToolTip(
       "Обмежити пошук одним регіоном або знову шукати по всьому процесу");
@@ -206,6 +220,7 @@ void MainWindow::build_ui() {
 
   process_row->addWidget(process_button);
   process_row->addWidget(launch_button);
+  process_row->addWidget(root_button);
   process_row->addWidget(region_button);
   process_row->addWidget(new QLabel("Емулятор", this));
   process_row->addWidget(emulator_combo_);
@@ -298,17 +313,37 @@ void MainWindow::build_ui() {
   auto *save_button = new QPushButton("Зберегти .gxt", this);
   auto *load_button = new QPushButton("Завантажити .gxt", this);
 
-  formula_edit_ = new QLineEdit(this);
-  formula_edit_->setPlaceholderText("(M1<>M2)and(M1=M3)");
-  formula_edit_->setToolTip("Відсів по знімках M1..M4. Спочатку «Зберегти M», "
-                            "змініть значення в грі, знову M, потім формула.");
-  auto *formula_button = new QPushButton("Формула", this);
   for (int i = 0; i < kDumpSlots; ++i) {
     dump_buttons_[static_cast<std::size_t>(i)] =
         new QPushButton(QString("M%1").arg(i + 1), this);
+    dump_buttons_[static_cast<std::size_t>(i)]->setMinimumWidth(44);
     dump_buttons_[static_cast<std::size_t>(i)]->setToolTip(
-        QString("Зберегти поточні значення збігів як знімок M%1").arg(i + 1));
+        QString("Зберегти поточні значення збігів як знімок M%1 "
+                "(після пошуку / відсіву)")
+            .arg(i + 1));
   }
+  formula_preset_ = new QComboBox(this);
+  formula_preset_->setToolTip("Підставить готову формулу в поле праворуч");
+  formula_preset_->addItem("Шаблон формули…", QString());
+  formula_preset_->addItem("Змінилось між M1 і M2", QStringLiteral("M1<>M2"));
+  formula_preset_->addItem("Змінилось, потім стабільно (M2=M3)",
+                           QStringLiteral("(M1<>M2)and(M2=M3)"));
+  formula_preset_->addItem("Змінилось і повернулось до M1",
+                           QStringLiteral("(M1<>M2)and(M1=M3)"));
+  formula_preset_->addItem("У M2 більше ніж у M1", QStringLiteral("M2>M1"));
+  formula_preset_->addItem("У M2 менше ніж у M1", QStringLiteral("M2<M1"));
+  formula_edit_ = new QLineEdit(this);
+  formula_edit_->setPlaceholderText("M1<>M2  або  (M1<>M2)and(M2=M3)");
+  formula_edit_->setToolTip(
+      "Умова по збережених знімках M1…M4. Спочатку збережіть M "
+      "(кнопки зліва), змініть гру, збережіть наступний M, потім "
+      "«Відсіяти формулою». Довідка — кнопка «?».");
+  auto *formula_button = new QPushButton("Відсіяти формулою", this);
+  formula_button->setToolTip(
+      "Залишити в списку збігів лише адреси, де формула істинна");
+  auto *dump_help_button = new QPushButton("?", this);
+  dump_help_button->setFixedWidth(28);
+  dump_help_button->setToolTip("Довідка: знімки M1–M4 і формули");
 
   hits_hint_ =
       new QLabel("Знайдені адреси. Подвійне клацання або кнопка «Додати обране "
@@ -336,14 +371,33 @@ void MainWindow::build_ui() {
   bottom_layout->addWidget(group_filter_);
   bottom_layout->addWidget(table_);
   auto *table_buttons = new QHBoxLayout();
+  auto *dump_box = new QGroupBox(
+      "Знімки M1–M4 — порівняти кілька станів однією формулою", this);
+  dump_box->setToolTip(
+      "Не плутати з звичайним «Відсіяти». Тут ви самі зберігаєте "
+      "значення в M1…M4 у різні моменти, потім відсіваєте формулою.");
+  auto *dump_layout = new QVBoxLayout(dump_box);
+  auto *dump_hint = new QLabel(
+      "1) Після пошуку натисніть M1 → 2) змініть число в грі → 3) M2 "
+      "(за потреби M3/M4) → 4) оберіть шаблон або впишіть формулу → "
+      "5) «Відсіяти формулою». Звичайне «Відсіяти» зверху — для "
+      "простіших кроків.",
+      dump_box);
+  dump_hint->setWordWrap(true);
+  dump_hint->setStyleSheet("color: #666;");
   auto *dump_row = new QHBoxLayout();
-  dump_row->addWidget(new QLabel("Знімки:", this));
+  dump_row->addWidget(new QLabel("Зберегти:", dump_box));
   for (QPushButton *button : dump_buttons_) {
     dump_row->addWidget(button);
   }
+  dump_row->addSpacing(8);
+  dump_row->addWidget(formula_preset_);
   dump_row->addWidget(formula_edit_, 1);
   dump_row->addWidget(formula_button);
-  bottom_layout->addLayout(dump_row);
+  dump_row->addWidget(dump_help_button);
+  dump_layout->addWidget(dump_hint);
+  dump_layout->addLayout(dump_row);
+  bottom_layout->addWidget(dump_box);
 
   table_buttons->addWidget(remove_button);
   table_buttons->addWidget(bind_button);
@@ -370,8 +424,14 @@ void MainWindow::build_ui() {
   central_layout->addWidget(progress_);
   central_layout->addWidget(splitter, 1);
   setCentralWidget(central);
-  statusBar()->showMessage("Спочатку оберіть процес. Потім знайдіть число → "
-                           "додайте вниз → змініть значення.");
+  if (elevated_privileges()) {
+    statusBar()->showMessage(
+        "Режим root. Оберіть процес (і вже відкриті ігри теж). "
+        "Не тримайте підвищені права без потреби.");
+  } else {
+    statusBar()->showMessage("Спочатку оберіть процес. Потім знайдіть число → "
+                             "додайте вниз → змініть значення.");
+  }
 
   build_menus();
 
@@ -383,6 +443,8 @@ void MainWindow::build_ui() {
           this, [this](int) { on_emulator_changed(); });
   connect(launch_button, &QPushButton::clicked, this,
           &MainWindow::launch_process);
+  connect(root_button, &QPushButton::clicked, this,
+          &MainWindow::restart_as_root);
   connect(region_button, &QPushButton::clicked, this,
           &MainWindow::choose_region);
   connect(scan_button_, &QPushButton::clicked, this,
@@ -411,6 +473,18 @@ void MainWindow::build_ui() {
   }
   connect(formula_button, &QPushButton::clicked, this,
           &MainWindow::refine_by_formula);
+  connect(dump_help_button, &QPushButton::clicked, this,
+          &MainWindow::open_dump_help);
+  connect(formula_preset_, qOverload<int>(&QComboBox::currentIndexChanged),
+          this, [this](int) {
+            if (formula_preset_ == nullptr || formula_edit_ == nullptr) {
+              return;
+            }
+            const QString text = formula_preset_->currentData().toString();
+            if (!text.isEmpty()) {
+              formula_edit_->setText(text);
+            }
+          });
   connect(save_button, &QPushButton::clicked, this, &MainWindow::save_table);
   connect(load_button, &QPushButton::clicked, this, &MainWindow::load_table);
   connect(op_combo_, &QComboBox::currentIndexChanged, this,
@@ -457,6 +531,9 @@ void MainWindow::build_menus() {
   auto *launch_action = process_menu->addAction("Запустити…");
   connect(launch_action, &QAction::triggered, this,
           &MainWindow::launch_process);
+  auto *root_action = process_menu->addAction("Перезапустити з правами root…");
+  root_action->setEnabled(!elevated_privileges());
+  connect(root_action, &QAction::triggered, this, &MainWindow::restart_as_root);
   auto *region_action = process_menu->addAction("Блок пам'яті…");
   connect(region_action, &QAction::triggered, this, &MainWindow::choose_region);
   auto *ram_action = process_menu->addAction("База RAM емулятора…");
@@ -550,6 +627,159 @@ void MainWindow::choose_process() {
   }
   attach_pid(dialog.selected_pid(),
              QString("pid %1").arg(dialog.selected_pid()));
+}
+
+void MainWindow::restart_as_root() {
+  if (elevated_privileges()) {
+    QMessageBox::information(this, "GameX",
+                             "GameX уже запущено з правами root.");
+    return;
+  }
+  if (scanning_) {
+    QMessageBox::information(this, "GameX", "Спочатку зупиніть пошук (Стоп).");
+    return;
+  }
+  if (elevate_process_ != nullptr &&
+      elevate_process_->state() != QProcess::NotRunning) {
+    QMessageBox::information(this, "GameX",
+                             "Уже триває запуск з root — дочекайтесь вікна "
+                             "або завершення попередньої спроби.");
+    return;
+  }
+
+  const QString app_path = QCoreApplication::applicationFilePath();
+  const QString sudo_hint = QString("sudo -E \"%1\"").arg(app_path);
+
+  QMessageBox confirm(this);
+  confirm.setIcon(QMessageBox::Question);
+  confirm.setWindowTitle("GameX — права root");
+  confirm.setText("Запустити ще один GameX з правами root?");
+  confirm.setInformativeText(
+      "Далі з'явиться вікно пароля.\n"
+      "Нове вікно «GameX (root)» відкриється окремо.\n\n"
+      "Потрібно, щоб підключатись до вже запущених ігор "
+      "(коли «Обрати процес» без root не читає пам'ять).\n"
+      "Не тримайте root довше, ніж потрібно.\n\n"
+      "Запасний варіант у терміналі:\n" +
+      sudo_hint);
+  confirm.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
+  confirm.setDefaultButton(QMessageBox::No);
+  if (confirm.exec() != QMessageBox::Yes) {
+    return;
+  }
+
+  if (!qgetenv("DISPLAY").isEmpty()) {
+    const QString xhost = QStandardPaths::findExecutable("xhost");
+    if (!xhost.isEmpty()) {
+      QProcess::execute(xhost, {QStringLiteral("+SI:localuser:root")});
+    }
+  }
+
+  const QString sudo = QStandardPaths::findExecutable("sudo");
+  const QString zenity = QStandardPaths::findExecutable("zenity");
+  if (sudo.isEmpty() || zenity.isEmpty()) {
+    QMessageBox::warning(
+        this, "GameX",
+        QString("Потрібні sudo і zenity.\nЗапустіть у терміналі:\n\n%1")
+            .arg(sudo_hint));
+    return;
+  }
+
+  // Пароль через zenity → sudo -S (без askpass-файла: він давав ETXTBSY).
+  // pkexec зрізає DISPLAY, тож ним не користуємось.
+  write_status("Введіть пароль у вікні…");
+  QProcess password_prompt;
+  password_prompt.start(zenity,
+                        {QStringLiteral("--password"),
+                         QStringLiteral("--title=GameX — пароль root")});
+  if (!password_prompt.waitForFinished(-1)) {
+    QMessageBox::warning(this, "GameX",
+                         "Не вдалося відкрити вікно пароля (zenity).\n\n" +
+                             sudo_hint);
+    return;
+  }
+  if (password_prompt.exitCode() != 0) {
+    write_status("Запуск з root скасовано");
+    return;
+  }
+  QByteArray password = password_prompt.readAllStandardOutput();
+  while (!password.isEmpty() &&
+         (password.endsWith('\n') || password.endsWith('\r'))) {
+    password.chop(1);
+  }
+  if (password.isEmpty()) {
+    write_status("Порожній пароль — скасовано");
+    return;
+  }
+
+  if (elevate_process_ != nullptr) {
+    elevate_process_->deleteLater();
+    elevate_process_ = nullptr;
+  }
+  elevate_process_ = new QProcess(this);
+  elevate_process_->setProcessChannelMode(QProcess::MergedChannels);
+  elevate_process_->setProcessEnvironment(
+      QProcessEnvironment::systemEnvironment());
+
+  connect(elevate_process_,
+          qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this,
+          [this, sudo_hint](int code, QProcess::ExitStatus) {
+            const QString out =
+                QString::fromLocal8Bit(elevate_process_->readAll()).trimmed();
+            if (code != 0) {
+              QString message =
+                  QString("Не вдалося запустити з root (код %1).").arg(code);
+              if (!out.isEmpty()) {
+                message += "\n\n" + out;
+              }
+              message += "\n\nСпробуйте в терміналі:\n" + sudo_hint;
+              QMessageBox::warning(this, "GameX", message);
+              write_status("Запуск з root не вдався");
+            } else {
+              write_status("Сеанс GameX (root) завершено");
+            }
+            if (elevate_process_ != nullptr) {
+              elevate_process_->deleteLater();
+              elevate_process_ = nullptr;
+            }
+          });
+  connect(elevate_process_, &QProcess::errorOccurred, this,
+          [this, sudo_hint](QProcess::ProcessError) {
+            if (elevate_process_ == nullptr) {
+              return;
+            }
+            QMessageBox::warning(
+                this, "GameX",
+                QString("Помилка запуску sudo: %1\n\n%2")
+                    .arg(elevate_process_->errorString(), sudo_hint));
+            write_status("Запуск з root не вдався");
+            elevate_process_->deleteLater();
+            elevate_process_ = nullptr;
+          });
+
+  const QStringList args = {
+      QStringLiteral("-S"),
+      QStringLiteral(
+          "--preserve-env=DISPLAY,XAUTHORITY,WAYLAND_DISPLAY,XDG_RUNTIME_DIR,"
+          "QT_QPA_PLATFORM,XDG_SESSION_TYPE"),
+      app_path,
+  };
+  elevate_process_->start(sudo, args);
+  if (!elevate_process_->waitForStarted(5000)) {
+    QMessageBox::warning(this, "GameX",
+                         QString("sudo не стартував: %1\n\n%2")
+                             .arg(elevate_process_->errorString(), sudo_hint));
+    elevate_process_->deleteLater();
+    elevate_process_ = nullptr;
+    password.fill('\0');
+    return;
+  }
+  elevate_process_->write(password);
+  elevate_process_->write("\n");
+  elevate_process_->closeWriteChannel();
+  password.fill('\0');
+
+  write_status("Запуск GameX (root)…");
 }
 
 void MainWindow::launch_process() {
@@ -1915,13 +2145,22 @@ void MainWindow::update_dump_indicators() {
 
 void MainWindow::refine_by_formula() {
   if (!scanner_ || !memory_) {
-    QMessageBox::information(this, "GameX", "Спочатку виконайте пошук");
+    QMessageBox::information(
+        this, "GameX",
+        "Спочатку виконайте пошук (Шукати), щоб був список збігів.\n"
+        "Потім збережіть знімки M1…M4 і відсійте формулою.");
     return;
   }
   const QString formula = formula_edit_->text().trimmed();
   if (formula.isEmpty()) {
     QMessageBox::information(this, "GameX",
-                             "Введіть формулу, наприклад (M1<>M2)and(M1=M3)");
+                             "Введіть або оберіть формулу.\n\n"
+                             "Приклад:\n"
+                             "  1) M1 — зберегти значення\n"
+                             "  2) змінити число в грі\n"
+                             "  3) M2 — другий знімок\n"
+                             "  4) формула M1<>M2 → «Відсіяти формулою»\n\n"
+                             "Кнопка «?» відкриває докладну довідку.");
     return;
   }
   std::string error;
@@ -1933,8 +2172,14 @@ void MainWindow::refine_by_formula() {
     return;
   }
   show_hits();
-  write_status(QString("Формула: залишилось %1")
+  write_status(QString("Формула «%1»: залишилось %2")
+                   .arg(formula)
                    .arg(static_cast<qulonglong>(status.hit_count)));
+}
+
+void MainWindow::open_dump_help() {
+  HelpDialog dialog(QStringLiteral("Формули M1–M4"), this);
+  dialog.exec();
 }
 
 void MainWindow::find_pointers_for_selected() {

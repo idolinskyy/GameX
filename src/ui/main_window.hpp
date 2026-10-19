@@ -65,6 +65,7 @@ private:
   void build_menus();
   void choose_process();
   void launch_process();
+  void restart_as_root();
   void attach_pid(pid_t pid, const QString &title);
   void disconnect_process();
   void run_scan(bool refine);
@@ -106,6 +107,7 @@ private:
   void capture_dump_slot(int slot);
   void refine_by_formula();
   void open_help();
+  void open_dump_help();
   void open_about();
   void open_about_qt();
   void on_emulator_changed();
@@ -136,6 +138,7 @@ private:
   QLabel *hits_hint_ = nullptr;
   QLabel *table_hint_ = nullptr;
   QLineEdit *group_filter_ = nullptr;
+  QComboBox *formula_preset_ = nullptr;
   QLineEdit *formula_edit_ = nullptr;
   QPushButton *scan_button_ = nullptr;
   QPushButton *refine_button_ = nullptr;
@@ -151,6 +154,7 @@ private:
   GamexTable *table_ = nullptr;
   QTimer *timer_ = nullptr;
   QProcess *child_ = nullptr;
+  QProcess *elevate_process_ = nullptr;
   QThread *scan_thread_ = nullptr;
 
   std::unique_ptr<ProcessMemory> memory_;

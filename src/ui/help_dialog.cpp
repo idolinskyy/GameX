@@ -12,6 +12,7 @@
 #include <QTextCursor>
 #include <QVBoxLayout>
 
+#include <algorithm>
 #include <iterator>
 
 namespace gamex {
@@ -56,9 +57,13 @@ constexpr HelpSection kSections[] = {
 На Ubuntu з Yama (<code>ptrace_scope=1</code>) звичайний користувач часто
 не читає вже відкриту гру через <b>Обрати процес</b>. Якщо гра —
 <b>нащадок</b> GameX («Запустити»), доступ працює.
-З <b>root</b> (<code>sudo gamex</code>) зазвичай можна чіплятись і до не-дочірніх
-процесів; при підключенні GameX одразу перевіряє читання.
-Не тримайте root постійно без потреби.</div>
+З <b>root</b> (кнопка <b>З правами root</b> / меню <b>Процес</b> —
+запит пароля через zenity, або <code>sudo -E gamex</code>) зазвичай можна
+чіплятись і до не-дочірніх процесів; при підключенні GameX одразу перевіряє
+читання. Не тримайте root постійно без потреби.</div>
+<div class="tip"><b>Пароль.</b> Кнопка передає його в <code>sudo -S</code>
+(не в argv). Зручно на довіреній машині; пароль коротко в пам'яті GameX.
+Надійніше вручну: <code>sudo -E gamex</code>.</div>
 <p>Поки шукаєте адресу, змінюйте значення <b>в самій грі</b>.
 GameX лише порівнює пам'ять між кроками.</p>
 )HTML"},
@@ -131,6 +136,9 @@ GameX лише порівнює пам'ять між кроками.</p>
 (у /proc на сучасних ядрах TID окремо не дублюються).
 При підключенні перевіряється читання пам'яті.</li>
 <li><b>Запустити</b> — старт гри як дочірнього процесу (рекомендовано без root).</li>
+<li><b>З правами root</b> — окремий GameX через <code>sudo -S</code>
++ zenity (пароль не в командному рядку; коротко в RAM).
+Альтернатива: <code>sudo -E gamex</code> у терміналі.</li>
 <li><b>Блок пам'яті</b> — шукати не всю гру, а один регіон.</li>
 <li><b>Емулятор</b> / <b>База RAM</b> — ігри приставок (див. розділ).</li>
 </ul>
@@ -265,16 +273,35 @@ GameX лише порівнює пам'ять між кроками.</p>
 
     {"Формули M1–M4", R"HTML(
 <h1>Знімки M1–M4 і формула</h1>
-<p>Коли потрібно відсіяти за умовою між <b>кількома станами</b> одразу:</p>
+<p>Звичайне <b>Відсіяти</b> порівнює «зараз» із попереднім кроком.
+Кнопки <b>M1…M4</b> — це <b>збережені копії значень</b> на збігах у вибраний момент,
+щоб порівняти <b>кілька станів одразу</b> однією умовою.</p>
+
+<h2>Типовий сценарій</h2>
 <ol>
-<li>Після пошуку / відсіву натисніть <b>M1</b> — кнопка стане <b>M1✓</b>.</li>
-<li>Змініть гру → за потреби знову Відсіяти → <b>M2</b> (і далі M3, M4).</li>
-<li>У полі формули, наприклад:
-<code>(M1&lt;&gt;M2)and(M1=M3)</code>.</li>
-<li><b>Формула</b> — лишаються адреси, для яких вираз істинний.</li>
+<li>Знайдіть число звичайним пошуком і трохи відсійте список
+(краще не на мільйонах адрес).</li>
+<li>Натисніть <b>M1</b> — запам'ятати поточні значення. Кнопка стане <b>M1✓</b>.</li>
+<li>Змініть значення <b>в грі</b> (витратьте гроші, втратьте життя…).</li>
+<li>За бажанням натисніть <b>Відсіяти</b> (зменшило — / збільшило —),
+потім <b>M2</b> — другий знімок.</li>
+<li>Оберіть шаблон формули або впишіть свою, наприклад
+<code>M1&lt;&gt;M2</code> («значення змінилось між знімками»).</li>
+<li><b>Відсіяти формулою</b> — лишаються лише адреси, де вираз істинний.</li>
 </ol>
-<div class="warn">Якщо формула згадує <code>M2</code>, а знімок M2 порожній —
-буде помилка (нулі більше не підставляються). Збережіть потрібні M спочатку.</div>
+
+<h2>Приклади формул</h2>
+<ul>
+<li><code>M1&lt;&gt;M2</code> — змінилось між M1 і M2.</li>
+<li><code>(M1&lt;&gt;M2)and(M2=M3)</code> — змінилось, потім стабільно
+(корисно, коли значення «стрибнуло» і завмерло).</li>
+<li><code>(M1&lt;&gt;M2)and(M1=M3)</code> — змінилось, потім повернулось
+як у M1.</li>
+<li><code>M2&gt;M1</code> — у M2 більше, ніж у M1.</li>
+</ul>
+
+<div class="warn">Якщо формула згадує <code>M2</code>, а знімок M2 ще не збережено —
+буде помилка. Спочатку натисніть потрібні <b>M</b> (з ✓).</div>
 <p>Оператори: <code>+ - * /</code>, <code>AND OR XOR NOT</code> (побітові),
 <code>SHL SHR MOD</code>, порівняння <code>= &lt;&gt; &lt; &gt;</code>, дужки.</p>
 <div class="tip">Спочатку звичайний відсів — формули по гігантському списку рідко потрібні.
@@ -337,8 +364,8 @@ GameX лише порівнює пам'ять між кроками.</p>
 <h1>Типові проблеми</h1>
 <ul>
 <li><b>Немає доступу / probe при підключенні.</b>
-Без root: <b>Запустити</b> гру з GameX. Або свідомо <code>sudo gamex</code>
-і знову <b>Обрати процес</b>.</li>
+Без root: <b>Запустити</b> гру з GameX. Або <b>З правами root</b>
+(чи <code>sudo gamex</code>) і знову <b>Обрати процес</b>.</li>
 <li><b>«Відсіяти» сіре.</b>
 Спочатку потрібен успішний <b>Шукати</b> (або знімок «Невідоме значення»).
 Після структури — спочатку <b>Скинути пошук</b>.</li>
@@ -412,7 +439,24 @@ QString HelpDialog::page_chrome(const QString &body_html) {
       .arg(body_html);
 }
 
-HelpDialog::HelpDialog(QWidget *parent) : QDialog(parent) {
+HelpDialog::HelpDialog(QWidget *parent) : QDialog(parent) { finish_setup(0); }
+
+HelpDialog::HelpDialog(const QString &section_title, QWidget *parent)
+    : QDialog(parent) {
+  finish_setup(section_index_by_title(section_title));
+}
+
+int HelpDialog::section_index_by_title(const QString &title) {
+  for (int i = 0; i < static_cast<int>(std::size(kSections)); ++i) {
+    if (title ==
+        QString::fromUtf8(kSections[static_cast<std::size_t>(i)].title)) {
+      return i;
+    }
+  }
+  return 0;
+}
+
+void HelpDialog::finish_setup(int initial_row) {
   setWindowTitle("Довідка GameX");
   resize(960, 700);
   setMinimumSize(720, 480);
@@ -510,7 +554,8 @@ HelpDialog::HelpDialog(QWidget *parent) : QDialog(parent) {
   root->setContentsMargins(0, 0, 0, 0);
   root->addWidget(split);
 
-  nav_->setCurrentRow(0);
+  const int row = std::clamp(initial_row, 0, std::max(0, nav_->count() - 1));
+  nav_->setCurrentRow(row);
 }
 
 void HelpDialog::show_section(int index) {
