@@ -19,10 +19,10 @@ WatchDialog::WatchDialog(pid_t pid, std::uintptr_t address, std::size_t size,
   resize(640, 420);
 
   auto *warn = new QLabel(
-      "Процес працює під ptrace і зупиняється на хіті. Лише процес, запущений "
-      "з GameX. На x86_64 RIP у звіті — адреса наступної інструкції після "
-      "запису (не самої insn, що писала). Нові потоки підхоплюються через "
-      "TRACECLONE. Заміну на NOP ця версія не робить.",
+      "Процес під ptrace зупиняється на записі в адресу. Краще брати процес, "
+      "запущений з GameX. На x86_64 RIP у звіті — наступна інструкція після "
+      "запису, не та що писала. Нові потоки теж відстежуються. "
+      "Заміну на NOP ця версія не робить.",
       this);
   warn->setWordWrap(true);
   warn->setStyleSheet("color: #a04000;");
@@ -36,7 +36,7 @@ WatchDialog::WatchDialog(pid_t pid, std::uintptr_t address, std::size_t size,
   log_ = new QPlainTextEdit(this);
   log_->setReadOnly(true);
   log_->setPlaceholderText(
-      "HIT: data + rip (після запису), байти наступної insn, мнемоніка "
+      "HIT: data + rip (після запису), байти наступної інструкції, мнемоніка "
       "(Capstone).");
 
   wait_button_ = new QPushButton("Чекати запис", this);
@@ -125,7 +125,8 @@ void WatchDialog::show_hit(const WatchHit &hit) {
   }
   append_log(line);
   status_->setText(
-      QString("Зупинено після запису; наступна insn @ 0x%1. Процес на паузі.")
+      QString(
+          "Зупинено після запису; наступна інструкція @ 0x%1. Процес на паузі.")
           .arg(static_cast<qulonglong>(hit.instruction), 0, 16));
   set_busy(false);
 }

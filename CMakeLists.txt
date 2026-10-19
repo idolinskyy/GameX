@@ -147,8 +147,8 @@ if(GAMEX_BUILD_UI)
             src/ui/main_window.cpp
             PROPERTIES OBJECT_DEPENDS "${GAMEX_BUILD_INFO_HEADER}")
 
-        # Якщо збираємо проти offline-Qt (не системного), вшиваємо шлях до .so,
-        # інакше після install підхопиться старіший /lib/.../libQt6Core і буде
+        # Qt з ~/Qt/… (не з /usr): прописуємо RPATH на його lib/,
+        # інакше після install підвантажиться системний Qt і буде
         # «version Qt_6.xx not found».
         if(GAMEX_QT_ROOT AND EXISTS "${GAMEX_QT_ROOT}/lib")
             set_target_properties(gamex PROPERTIES

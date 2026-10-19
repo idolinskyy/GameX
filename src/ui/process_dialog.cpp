@@ -42,15 +42,14 @@ ProcessDialog::ProcessDialog(QWidget *parent) : QDialog(parent) {
       new QCheckBox("Лише з панелі оболонки (запущені програми)", this);
   panel_only_->setChecked(true);
   panel_only_->setToolTip(
-      "Процеси вікон, які показує панель задач (EWMH _NET_CLIENT_LIST, "
-      "без SKIP_TASKBAR / desktop / dock). Потрібен X11 або XWayland "
-      "(змінна DISPLAY). Чистий Wayland без XWayland — список може бути "
-      "порожнім.");
+      "Лише програми з іконками на панелі задач (вікна оболонки через X11). "
+      "Потрібен DISPLAY (X11 або XWayland). На чистому Wayland без XWayland "
+      "список може вийти порожнім.");
 
   auto *note = new QLabel(
-      "На сучасних Linux у /proc уже лише головні процеси: окремі потоки "
-      "(TID) там не дублюються. «Потоки» — скільки тредів усередині. "
-      "Панель — вікна з taskbar оболонки, не повний список /proc.",
+      "У /proc на сучасних ядрах уже лише головні процеси — окремі потоки "
+      "там не дублюються. Колонка «Потоки» — скільки їх усередині. "
+      "Фільтр панелі показує те, що видно на панелі задач, а не весь /proc.",
       this);
   note->setWordWrap(true);
   note->setStyleSheet("color: #888;");

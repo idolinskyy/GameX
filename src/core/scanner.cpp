@@ -170,7 +170,7 @@ void Scanner::replace_hits(std::vector<ScanHit> hits) {
   width_ = 0;
   truncated_ = false;
   snapshots_.clear();
-  for (ScanHit& hit : hits) {
+  for (ScanHit &hit : hits) {
     if (hit.previous.empty()) {
       continue;
     }
@@ -352,10 +352,11 @@ ScanStatus Scanner::scan_unknown(const ScanQuery &query,
 
   if (!any_read && denied) {
     snapshots_.clear();
-    status.message = "Немає прав читати пам'ять цього процесу. Ядро Yama "
-                     "дозволяє ptrace лише нащадкам, "
-                     "тому гру варто запускати з GameX, а не чіплятися до вже "
-                     "відкритого процесу.";
+    status.message =
+        "Немає прав читати пам'ять цього процесу. Ядро Yama "
+        "дозволяє ptrace лише нащадкам, "
+        "тому гру варто запускати з GameX, а не підключатись до вже "
+        "відкритого процесу.";
     return status;
   }
   status.ok = true;
@@ -442,10 +443,11 @@ ScanStatus Scanner::scan_values(const ScanQuery &query,
 
   if (!any_read && denied) {
     reset();
-    status.message = "Немає прав читати пам'ять цього процесу. Ядро Yama "
-                     "дозволяє ptrace лише нащадкам, "
-                     "тому гру варто запускати з GameX, а не чіплятися до вже "
-                     "відкритого процесу.";
+    status.message =
+        "Немає прав читати пам'ять цього процесу. Ядро Yama "
+        "дозволяє ptrace лише нащадкам, "
+        "тому гру варто запускати з GameX, а не підключатись до вже "
+        "відкритого процесу.";
     return status;
   }
   status.ok = true;
@@ -459,8 +461,9 @@ ScanStatus Scanner::scan_values(const ScanQuery &query,
   return status;
 }
 
-ScanStatus Scanner::scan_structure(const StructureTemplate &tmpl, const ScanQuery &region,
-                                  const ScanControl &control) {
+ScanStatus Scanner::scan_structure(const StructureTemplate &tmpl,
+                                   const ScanQuery &region,
+                                   const ScanControl &control) {
   reset();
   ScanStatus status;
   if (memory_ == nullptr || !memory_->alive()) {
@@ -537,10 +540,11 @@ ScanStatus Scanner::scan_structure(const StructureTemplate &tmpl, const ScanQuer
 
   if (!any_read && denied) {
     reset();
-    status.message = "Немає прав читати пам'ять цього процесу. Ядро Yama "
-                     "дозволяє ptrace лише нащадкам, "
-                     "тому гру варто запускати з GameX, а не чіплятися до вже "
-                     "відкритого процесу.";
+    status.message =
+        "Немає прав читати пам'ять цього процесу. Ядро Yama "
+        "дозволяє ptrace лише нащадкам, "
+        "тому гру варто запускати з GameX, а не підключатись до вже "
+        "відкритого процесу.";
     return status;
   }
   status.ok = true;

@@ -99,13 +99,13 @@ void MainWindow::build_ui() {
       "«З правами root».");
   auto *launch_button = new QPushButton("Запустити", this);
   launch_button->setToolTip(
-      "Стартувати гру як дочірній процес — основний шлях без root. "
-      "На Ubuntu з ptrace_scope=1 це найнадійніше.");
+      "Запустити гру як дочірній процес — зручний спосіб без root. "
+      "На Ubuntu з ptrace_scope=1 саме так найчастіше і працює.");
   auto *root_button = new QPushButton("З правами root", this);
   root_button->setToolTip(
-      "Запустити ще один GameX з правами root (пароль через zenity/sudo). "
-      "Потрібно, щоб чіплятись до вже відкритих ігор при ptrace_scope=1. "
-      "Не тримайте root постійно без потреби.");
+      "Відкрити ще один GameX від root (пароль у zenity → sudo). "
+      "Потрібно, щоб підключатись до вже відкритих ігор при ptrace_scope=1. "
+      "Не тримайте root без потреби.");
   root_button->setEnabled(!elevated_privileges());
   auto *region_button = new QPushButton("Блок пам'яті", this);
   region_button->setToolTip(
@@ -308,8 +308,9 @@ void MainWindow::build_ui() {
       "Шаблон кількох полів зі зсувами; пошук одним проходом");
   auto *watch_button = new QPushButton("Хто пише…", this);
   watch_button->setToolTip(
-      "Апаратний watchpoint (ptrace). Лише процес з GameX. RIP у звіті — "
-      "інструкція після запису; нові потоки підхоплюються (TRACECLONE).");
+      "Апаратний watchpoint (ptrace). Краще для процесу, запущеного з GameX. "
+      "У звіті RIP — наступна інструкція після запису; нові потоки теж "
+      "відстежуються.");
   auto *save_button = new QPushButton("Зберегти .gxt", this);
   auto *load_button = new QPushButton("Завантажити .gxt", this);
 
@@ -374,14 +375,13 @@ void MainWindow::build_ui() {
   auto *dump_box = new QGroupBox(
       "Знімки M1–M4 — порівняти кілька станів однією формулою", this);
   dump_box->setToolTip(
-      "Не плутати з звичайним «Відсіяти». Тут ви самі зберігаєте "
-      "значення в M1…M4 у різні моменти, потім відсіваєте формулою.");
+      "Окремо від звичайного «Відсіяти»: самі зберігаєте значення в M1…M4 "
+      "у різні моменти, потім відсіваєте формулою.");
   auto *dump_layout = new QVBoxLayout(dump_box);
   auto *dump_hint = new QLabel(
-      "1) Після пошуку натисніть M1 → 2) змініть число в грі → 3) M2 "
-      "(за потреби M3/M4) → 4) оберіть шаблон або впишіть формулу → "
-      "5) «Відсіяти формулою». Звичайне «Відсіяти» зверху — для "
-      "простіших кроків.",
+      "Після пошуку: M1 → змініть число в грі → M2 (далі M3/M4 за бажанням) → "
+      "формула → «Відсіяти формулою». Для простих кроків досить звичайного "
+      "«Відсіяти» зверху.",
       dump_box);
   dump_hint->setWordWrap(true);
   dump_hint->setStyleSheet("color: #666;");
@@ -872,10 +872,9 @@ void MainWindow::attach_pid(pid_t pid, const QString &title) {
   const bool as_root = elevated_privileges();
   QString access = "Процес підключено · читання пам'яті OK.";
   if (as_root) {
-    access += " Режим root (підвищені права) — можна чіплятись і до "
-              "не-дочірніх процесів.";
+    access += " Режим root — можна підключатись і до вже відкритих процесів.";
   } else if (scope == "1") {
-    access += " ptrace_scope=1: без root надійніше запускати гру через "
+    access += " ptrace_scope=1: без root краще відкривати гру через "
               "«Запустити».";
   } else if (scope == "0") {
     access += " ptrace_scope=0: читання процесів того ж користувача "

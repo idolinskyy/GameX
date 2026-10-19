@@ -73,7 +73,7 @@ std::vector<ProcessInfo> list_processes();
 std::string executable_path(pid_t pid);
 std::string ptrace_scope();
 std::optional<unsigned long long> process_starttime(pid_t pid);
-// true якщо ефективний uid == 0 (типово після sudo).
+// true, якщо ефективний uid == 0 (наприклад після sudo).
 bool elevated_privileges();
 // Мінімальний UID звичайного логіну (/etc/login.defs UID_MIN, інакше 1000).
 uid_t login_uid_min();
