@@ -408,6 +408,26 @@ GameX лише порівнює пам'ять між кроками.</p>
 </ul>
 )HTML"},
 
+    {"Для розробників", R"HTML(
+<h1>Для розробників / Contributors</h1>
+<p>Повна довідка — файл <code>CONTRIBUTING.md</code> у репозиторії
+(після встановлення також у документації пакета, поруч із README).</p>
+<h2>Швидко</h2>
+<ul>
+<li><b>Ядро без Qt:</b> <code>src/core/</code> → бібліотека <code>gamex_core</code>.</li>
+<li><b>Інтерфейс:</b> <code>src/ui/</code> + <code>ScanWorker</code> у окремому потоці.</li>
+<li><b>Тести:</b> <code>tests/test_core.cpp</code> —
+<code>cmake --build build &amp;&amp; ctest --test-dir build</code>.</li>
+<li>Під час пошуку не чіпайте <code>Scanner</code> з UI-потоку
+(M1–M4 / формула вже блокуються).</li>
+</ul>
+<h2>Що не приймаємо</h2>
+<p>Партії з обходом античиту, мережевим читом, приховуванням процесу,
+NOP/inject, speedhack — відхиляються. Див. розділ <b>«Межі»</b>.</p>
+<div class="tip">Зміни в поведінці для користувача — оновіть README і цю довідку
+в тому ж патчі.</div>
+)HTML"},
+
     {"Межі", R"HTML(
 <h1>Чого немає і не буде</h1>
 <p>GameX — локальний редактор <b>значень у пам'яті</b> процесу на Linux.
