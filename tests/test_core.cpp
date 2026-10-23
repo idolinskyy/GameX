@@ -1003,6 +1003,42 @@ void test_process_starttime() {
   (void)gamex::elevated_privileges();
 }
 
+void test_replace_hits_undo() {
+  auto opened = gamex::ProcessMemory::open(::getpid(), nullptr);
+  expect(opened.has_value(), "open self for replace_hits");
+  if (!opened) {
+    return;
+  }
+  gamex::Scanner scanner(*opened);
+  std::vector<gamex::ScanHit> original;
+  for (int i = 0; i < 3; ++i) {
+    gamex::ScanHit hit;
+    hit.address = static_cast<std::uintptr_t>(0x1000 + i * 4);
+    hit.previous = {
+        std::byte{static_cast<unsigned char>(10 + i)},
+        std::byte{0},
+        std::byte{0},
+        std::byte{0},
+    };
+    original.push_back(hit);
+  }
+  scanner.replace_hits(original);
+  expect(scanner.hit_count() == 3, "replace_hits seeds three hits");
+  const auto undo = scanner.hits();
+  expect(undo.size() == 3, "hits() snapshot size");
+
+  std::vector<gamex::ScanHit> refined = {original.front()};
+  scanner.replace_hits(refined);
+  expect(scanner.hit_count() == 1, "refine leaves one hit");
+
+  scanner.replace_hits(undo);
+  expect(scanner.hit_count() == 3, "undo restores three hits");
+  expect(scanner.hit_at(1).address == original[1].address,
+         "undo restores middle address");
+  expect(scanner.hit_at(1).previous == original[1].previous,
+         "undo restores middle bytes");
+}
+
 } // namespace
 
 int main() {
@@ -1017,6 +1053,7 @@ int main() {
   test_expression_and_mask();
   test_dump_formula_empty_slot();
   test_process_starttime();
+  test_replace_hits_undo();
   test_module_bind_and_resolve();
   test_structure_scan_child();
   test_emulator_guest_mapping();

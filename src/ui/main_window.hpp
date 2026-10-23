@@ -20,14 +20,17 @@
 
 class QAction;
 class QCheckBox;
+class QCloseEvent;
 class QComboBox;
 class QGroupBox;
 class QLabel;
 class QLineEdit;
+class QMenu;
 class QProcess;
 class QProgressBar;
 class QPushButton;
 class QSpinBox;
+class QSplitter;
 class QThread;
 class QTimer;
 class QToolButton;
@@ -49,6 +52,9 @@ public:
   explicit MainWindow(QWidget *parent = nullptr);
   ~MainWindow() override;
 
+protected:
+  void closeEvent(QCloseEvent *event) override;
+
 private:
   enum TableColumn {
     ColHold = 0,
@@ -66,8 +72,11 @@ private:
 
   void build_ui();
   void build_menus();
+  void load_settings();
+  void save_settings() const;
   void choose_process();
   void launch_process();
+  void do_launch(const QString &command);
   void restart_as_root();
   void attach_pid(pid_t pid, const QString &title);
   void disconnect_process();
@@ -76,6 +85,11 @@ private:
                          std::optional<StructureTemplate> structure);
   void wait_for_scan_thread();
   void reset_scan();
+  void undo_refine();
+  void remember_refine_undo();
+  void clear_refine_undo();
+  void remember_launch(const QString &command);
+  void rebuild_launch_history_menu();
   void add_selected_hit();
   void remove_selected_entries();
   void save_table();
@@ -93,6 +107,7 @@ private:
   void refresh_hit_values();
   void show_entries();
   void apply_group_filter();
+  void copy_selected_hit_addresses();
   void update_value_fields();
   void update_dump_indicators();
   void update_scan_controls();
@@ -145,22 +160,34 @@ private:
   QLabel *region_label_ = nullptr;
   QLabel *hits_hint_ = nullptr;
   QLabel *table_hint_ = nullptr;
+  QLineEdit *hits_filter_ = nullptr;
   QLineEdit *group_filter_ = nullptr;
   QComboBox *formula_preset_ = nullptr;
   QLineEdit *formula_edit_ = nullptr;
+  QPushButton *formula_button_ = nullptr;
   QPushButton *scan_button_ = nullptr;
   QPushButton *refine_button_ = nullptr;
+  QPushButton *undo_refine_button_ = nullptr;
   QPushButton *stop_button_ = nullptr;
   QPushButton *reset_button_ = nullptr;
   QAction *scan_action_ = nullptr;
   QAction *refine_action_ = nullptr;
+  QAction *undo_refine_action_ = nullptr;
   QAction *reset_action_ = nullptr;
   QAction *stop_action_ = nullptr;
+  QAction *formula_action_ = nullptr;
+  QMenu *launch_history_menu_ = nullptr;
   std::array<QPushButton *, kDumpSlots> dump_buttons_{};
+  std::array<QAction *, kDumpSlots> dump_actions_{};
   QProgressBar *progress_ = nullptr;
+  QSplitter *main_splitter_ = nullptr;
   QTableWidget *results_ = nullptr;
   GamexTable *table_ = nullptr;
   QTimer *timer_ = nullptr;
+  QString last_launch_command_;
+  QStringList launch_history_;
+  std::vector<ScanHit> refine_undo_;
+  bool have_refine_undo_ = false;
   QProcess *child_ = nullptr;
   QProcess *elevate_process_ = nullptr;
   QThread *scan_thread_ = nullptr;

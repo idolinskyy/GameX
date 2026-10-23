@@ -8,6 +8,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QSettings>
 #include <QTableWidget>
 #include <QVBoxLayout>
 
@@ -104,8 +105,57 @@ ProcessDialog::ProcessDialog(QWidget *parent) : QDialog(parent) {
   layout->addWidget(empty_hint_);
   layout->addWidget(table_);
   layout->addWidget(buttons);
+  load_settings();
   reload();
   filter_->setFocus();
+}
+
+ProcessDialog::~ProcessDialog() { save_settings(); }
+
+void ProcessDialog::load_settings() {
+  QSettings settings;
+  settings.beginGroup(QStringLiteral("processDialog"));
+  if (settings.contains(QStringLiteral("geometry"))) {
+    restoreGeometry(settings.value(QStringLiteral("geometry")).toByteArray());
+  }
+  if (filter_ != nullptr && settings.contains(QStringLiteral("filter"))) {
+    filter_->setText(settings.value(QStringLiteral("filter")).toString());
+  }
+  if (login_users_only_ != nullptr &&
+      settings.contains(QStringLiteral("loginUsersOnly"))) {
+    login_users_only_->setChecked(
+        settings.value(QStringLiteral("loginUsersOnly")).toBool());
+  }
+  if (my_uid_only_ != nullptr && settings.contains(QStringLiteral("myUidOnly"))) {
+    my_uid_only_->setChecked(
+        settings.value(QStringLiteral("myUidOnly")).toBool());
+  }
+  if (panel_only_ != nullptr &&
+      settings.contains(QStringLiteral("panelOnly"))) {
+    panel_only_->setChecked(
+        settings.value(QStringLiteral("panelOnly")).toBool());
+  }
+  settings.endGroup();
+}
+
+void ProcessDialog::save_settings() const {
+  QSettings settings;
+  settings.beginGroup(QStringLiteral("processDialog"));
+  settings.setValue(QStringLiteral("geometry"), saveGeometry());
+  if (filter_ != nullptr) {
+    settings.setValue(QStringLiteral("filter"), filter_->text());
+  }
+  if (login_users_only_ != nullptr) {
+    settings.setValue(QStringLiteral("loginUsersOnly"),
+                      login_users_only_->isChecked());
+  }
+  if (my_uid_only_ != nullptr) {
+    settings.setValue(QStringLiteral("myUidOnly"), my_uid_only_->isChecked());
+  }
+  if (panel_only_ != nullptr) {
+    settings.setValue(QStringLiteral("panelOnly"), panel_only_->isChecked());
+  }
+  settings.endGroup();
 }
 
 void ProcessDialog::reload() {

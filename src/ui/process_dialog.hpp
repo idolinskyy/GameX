@@ -20,6 +20,7 @@ class ProcessDialog : public QDialog {
 
 public:
   explicit ProcessDialog(QWidget *parent = nullptr);
+  ~ProcessDialog() override;
 
   pid_t selected_pid() const { return selected_pid_; }
 
@@ -27,6 +28,8 @@ private:
   void reload();
   void apply_filter();
   void accept_selection();
+  void load_settings();
+  void save_settings() const;
 
   QLineEdit *filter_ = nullptr;
   QCheckBox *login_users_only_ = nullptr;

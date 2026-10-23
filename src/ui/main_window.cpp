@@ -18,7 +18,10 @@
 
 #include <QAbstractItemView>
 #include <QAction>
+#include <QApplication>
 #include <QCheckBox>
+#include <QClipboard>
+#include <QCloseEvent>
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QFileDialog>
@@ -37,6 +40,7 @@
 #include <QProcessEnvironment>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QSettings>
 #include <QSpinBox>
 #include <QSplitter>
 #include <QStandardPaths>
@@ -70,6 +74,7 @@ void add_type(QComboBox *combo, const QString &label, ValueType type) {
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
   build_ui();
+  load_settings();
   timer_ = new QTimer(this);
   timer_->setInterval(250);
   connect(timer_, &QTimer::timeout, this, &MainWindow::refresh_views);
@@ -83,6 +88,46 @@ MainWindow::~MainWindow() {
     child_->kill();
     child_->waitForFinished(1000);
   }
+}
+
+void MainWindow::closeEvent(QCloseEvent *event) {
+  save_settings();
+  QMainWindow::closeEvent(event);
+}
+
+void MainWindow::load_settings() {
+  QSettings settings;
+  settings.beginGroup(QStringLiteral("mainWindow"));
+  if (settings.contains(QStringLiteral("geometry"))) {
+    restoreGeometry(settings.value(QStringLiteral("geometry")).toByteArray());
+  }
+  if (settings.contains(QStringLiteral("state"))) {
+    restoreState(settings.value(QStringLiteral("state")).toByteArray());
+  }
+  if (main_splitter_ != nullptr &&
+      settings.contains(QStringLiteral("splitter"))) {
+    main_splitter_->restoreState(
+        settings.value(QStringLiteral("splitter")).toByteArray());
+  }
+  last_launch_command_ =
+      settings.value(QStringLiteral("lastLaunchCommand")).toString();
+  launch_history_ =
+      settings.value(QStringLiteral("launchHistory")).toStringList();
+  settings.endGroup();
+  rebuild_launch_history_menu();
+}
+
+void MainWindow::save_settings() const {
+  QSettings settings;
+  settings.beginGroup(QStringLiteral("mainWindow"));
+  settings.setValue(QStringLiteral("geometry"), saveGeometry());
+  settings.setValue(QStringLiteral("state"), saveState());
+  if (main_splitter_ != nullptr) {
+    settings.setValue(QStringLiteral("splitter"), main_splitter_->saveState());
+  }
+  settings.setValue(QStringLiteral("lastLaunchCommand"), last_launch_command_);
+  settings.setValue(QStringLiteral("launchHistory"), launch_history_);
+  settings.endGroup();
 }
 
 void MainWindow::build_ui() {
@@ -195,6 +240,11 @@ void MainWindow::build_ui() {
   refine_button_ = new QPushButton("Відсіяти", this);
   refine_button_->setToolTip(
       "Залишити лише адреси, які відповідають новій умові");
+  undo_refine_button_ = new QPushButton("Скасувати відсів", this);
+  undo_refine_button_->setToolTip(
+      "Повернути список збігів до стану перед останнім «Відсіяти» "
+      "або формулою (один крок)");
+  undo_refine_button_->setEnabled(false);
   stop_button_ = new QPushButton("Стоп", this);
   stop_button_->setEnabled(false);
   reset_button_ = new QPushButton("Скинути пошук", this);
@@ -278,6 +328,7 @@ void MainWindow::build_ui() {
   auto *actions = new QHBoxLayout();
   actions->addWidget(scan_button_);
   actions->addWidget(refine_button_);
+  actions->addWidget(undo_refine_button_);
   actions->addWidget(stop_button_);
   actions->addWidget(reset_button_);
   actions->addWidget(search_more_button_);
@@ -285,6 +336,13 @@ void MainWindow::build_ui() {
   search_layout->addLayout(search_grid);
   search_layout->addWidget(search_advanced_);
   search_layout->addLayout(actions);
+
+  hits_filter_ = new QLineEdit(this);
+  hits_filter_->setPlaceholderText("Фільтр збігів за адресою або значенням…");
+  hits_filter_->setClearButtonEnabled(true);
+  hits_filter_->setToolTip(
+      "Показує лише рядки, де адреса або значення містить текст. "
+      "Ctrl+C — скопіювати виділені адреси.");
 
   results_ = new QTableWidget(this);
   results_->setColumnCount(2);
@@ -295,7 +353,9 @@ void MainWindow::build_ui() {
   results_->verticalHeader()->setVisible(false);
   results_->horizontalHeader()->setStretchLastSection(true);
   results_->setToolTip("Це лише знайдені адреси. Щоб змінити число в грі, "
-                       "додайте рядок у таблицю нижче.");
+                       "додайте рядок у таблицю нижче. "
+                       "Ctrl+C — копіювати адреси.");
+  results_->setContextMenuPolicy(Qt::CustomContextMenu);
 
   table_ = new GamexTable(this);
   table_->setColumnCount(ColCount);
@@ -368,8 +428,8 @@ void MainWindow::build_ui() {
       "Умова по збережених знімках M1…M4. Спочатку збережіть M "
       "(кнопки зліва), змініть гру, збережіть наступний M, потім "
       "«Відсіяти формулою». Довідка — кнопка «?».");
-  auto *formula_button = new QPushButton("Відсіяти формулою", this);
-  formula_button->setToolTip(
+  formula_button_ = new QPushButton("Відсіяти формулою", this);
+  formula_button_->setToolTip(
       "Залишити в списку збігів лише адреси, де формула істинна");
   auto *dump_help_button = new QPushButton("?", this);
   dump_help_button->setFixedWidth(28);
@@ -391,6 +451,7 @@ void MainWindow::build_ui() {
   auto *top_layout = new QVBoxLayout(top_box);
   top_layout->setContentsMargins(0, 0, 0, 0);
   top_layout->addWidget(hits_hint_);
+  top_layout->addWidget(hits_filter_);
   top_layout->addWidget(results_);
   top_layout->addWidget(add_button);
 
@@ -427,7 +488,7 @@ void MainWindow::build_ui() {
   dump_row->addSpacing(8);
   dump_row->addWidget(formula_preset_);
   dump_row->addWidget(formula_edit_, 1);
-  dump_row->addWidget(formula_button);
+  dump_row->addWidget(formula_button_);
   dump_row->addWidget(dump_help_button);
   dump_content_layout->addWidget(dump_hint);
   dump_content_layout->addLayout(dump_row);
@@ -446,11 +507,11 @@ void MainWindow::build_ui() {
   table_buttons->addWidget(load_button);
   bottom_layout->addLayout(table_buttons);
 
-  auto *splitter = new QSplitter(Qt::Vertical, this);
-  splitter->addWidget(top_box);
-  splitter->addWidget(bottom_box);
-  splitter->setStretchFactor(0, 1);
-  splitter->setStretchFactor(1, 1);
+  main_splitter_ = new QSplitter(Qt::Vertical, this);
+  main_splitter_->addWidget(top_box);
+  main_splitter_->addWidget(bottom_box);
+  main_splitter_->setStretchFactor(0, 1);
+  main_splitter_->setStretchFactor(1, 1);
 
   auto *central = new QWidget(this);
   auto *central_layout = new QVBoxLayout(central);
@@ -459,7 +520,7 @@ void MainWindow::build_ui() {
   central_layout->addWidget(search_box);
   central_layout->addWidget(dump_box_);
   central_layout->addWidget(progress_);
-  central_layout->addWidget(splitter, 1);
+  central_layout->addWidget(main_splitter_, 1);
   setCentralWidget(central);
   if (elevated_privileges()) {
     statusBar()->showMessage(
@@ -488,6 +549,8 @@ void MainWindow::build_ui() {
           [this] { run_scan(false); });
   connect(refine_button_, &QPushButton::clicked, this,
           [this] { run_scan(true); });
+  connect(undo_refine_button_, &QPushButton::clicked, this,
+          &MainWindow::undo_refine);
   connect(stop_button_, &QPushButton::clicked, this, &MainWindow::stop_scan);
   connect(reset_button_, &QPushButton::clicked, this, &MainWindow::reset_scan);
   connect(add_button, &QPushButton::clicked, this,
@@ -508,7 +571,7 @@ void MainWindow::build_ui() {
     connect(dump_buttons_[static_cast<std::size_t>(i)], &QPushButton::clicked,
             this, [this, i] { capture_dump_slot(i); });
   }
-  connect(formula_button, &QPushButton::clicked, this,
+  connect(formula_button_, &QPushButton::clicked, this,
           &MainWindow::refine_by_formula);
   connect(dump_help_button, &QPushButton::clicked, this,
           &MainWindow::open_dump_help);
@@ -541,6 +604,27 @@ void MainWindow::build_ui() {
             }
             add_selected_hit();
           });
+  connect(hits_filter_, &QLineEdit::textChanged, this,
+          [this](const QString &) { show_hits(); });
+  connect(results_, &QTableWidget::customContextMenuRequested, this,
+          [this](const QPoint &pos) {
+            QMenu menu(this);
+            auto *copy = menu.addAction("Копіювати адреси");
+            copy->setShortcut(QKeySequence::Copy);
+            auto *add = menu.addAction("Додати обране ↓");
+            QAction *chosen = menu.exec(results_->viewport()->mapToGlobal(pos));
+            if (chosen == copy) {
+              copy_selected_hit_addresses();
+            } else if (chosen == add) {
+              add_selected_hit();
+            }
+          });
+  auto *copy_hits = new QAction(this);
+  copy_hits->setShortcut(QKeySequence::Copy);
+  copy_hits->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+  results_->addAction(copy_hits);
+  connect(copy_hits, &QAction::triggered, this,
+          &MainWindow::copy_selected_hit_addresses);
   connect(group_filter_, &QLineEdit::textChanged, this,
           [this](const QString &) { apply_group_filter(); });
   update_value_fields();
@@ -568,6 +652,8 @@ void MainWindow::build_menus() {
   auto *launch_action = process_menu->addAction("Запустити…");
   connect(launch_action, &QAction::triggered, this,
           &MainWindow::launch_process);
+  launch_history_menu_ = process_menu->addMenu("Недавні запуски");
+  rebuild_launch_history_menu();
   auto *root_action = process_menu->addAction("Перезапустити з правами root…");
   root_action->setEnabled(!elevated_privileges());
   connect(root_action, &QAction::triggered, this, &MainWindow::restart_as_root);
@@ -587,19 +673,23 @@ void MainWindow::build_menus() {
   refine_action_ = search_menu->addAction("Відсіяти");
   connect(refine_action_, &QAction::triggered, this,
           [this] { run_scan(true); });
+  undo_refine_action_ = search_menu->addAction("Скасувати відсів");
+  undo_refine_action_->setShortcut(QKeySequence::Undo);
+  connect(undo_refine_action_, &QAction::triggered, this,
+          &MainWindow::undo_refine);
   stop_action_ = search_menu->addAction("Стоп");
   connect(stop_action_, &QAction::triggered, this, &MainWindow::stop_scan);
   reset_action_ = search_menu->addAction("Скинути пошук");
   connect(reset_action_, &QAction::triggered, this, &MainWindow::reset_scan);
   search_menu->addSeparator();
   for (int i = 0; i < kDumpSlots; ++i) {
-    auto *dump_action =
+    dump_actions_[static_cast<std::size_t>(i)] =
         search_menu->addAction(QString("Зберегти знімок M%1").arg(i + 1));
-    connect(dump_action, &QAction::triggered, this,
-            [this, i] { capture_dump_slot(i); });
+    connect(dump_actions_[static_cast<std::size_t>(i)], &QAction::triggered,
+            this, [this, i] { capture_dump_slot(i); });
   }
-  auto *formula_action = search_menu->addAction("Відсіяти за формулою…");
-  connect(formula_action, &QAction::triggered, this,
+  formula_action_ = search_menu->addAction("Відсіяти за формулою…");
+  connect(formula_action_, &QAction::triggered, this,
           &MainWindow::refine_by_formula);
   search_menu->addSeparator();
   auto *add_action = search_menu->addAction("Додати обране в таблицю");
@@ -825,15 +915,20 @@ void MainWindow::launch_process() {
       QInputDialog::getText(this, "Запустити процес",
                             "Команда без оболонки. GameX стане батьківським "
                             "процесом, тож читання пам'яті дозволене.",
-                            QLineEdit::Normal, {}, &ok);
+                            QLineEdit::Normal, last_launch_command_, &ok);
   if (!ok || command.trimmed().isEmpty()) {
     return;
   }
+  do_launch(command.trimmed());
+}
+
+void MainWindow::do_launch(const QString &command) {
   const QStringList parts = QProcess::splitCommand(command);
   if (parts.isEmpty()) {
     QMessageBox::warning(this, "GameX", "Порожня команда");
     return;
   }
+  remember_launch(command);
   if (child_ == nullptr) {
     child_ = new QProcess(this);
     connect(child_, &QProcess::started, this, [this] {
@@ -885,6 +980,7 @@ void MainWindow::attach_pid(pid_t pid, const QString &title) {
   }
   wait_for_scan_thread();
   scan_session_ = false;
+  clear_refine_undo();
   scanner_.reset();
   memory_ = std::make_unique<ProcessMemory>(std::move(*opened));
 
@@ -974,6 +1070,11 @@ ScanQuery MainWindow::current_query(std::string *error) const {
 
 void MainWindow::start_scan_worker(ScanQuery query, bool refine,
                                    std::optional<StructureTemplate> structure) {
+  if (refine) {
+    remember_refine_undo();
+  } else {
+    clear_refine_undo();
+  }
   cancel_.store(false);
   set_scanning(true);
   progress_->setValue(0);
@@ -1061,12 +1162,77 @@ void MainWindow::reset_scan() {
   }
   last_structure_.reset();
   scan_session_ = false;
+  clear_refine_undo();
   dumps_.clear();
   update_dump_indicators();
   results_->setRowCount(0);
   results_->setHorizontalHeaderLabels({"Адреса", "Значення зараз"});
   statusBar()->showMessage("Пошук скинуто — можна знову натиснути «Шукати»");
   update_scan_controls();
+}
+
+void MainWindow::remember_refine_undo() {
+  refine_undo_.clear();
+  have_refine_undo_ = false;
+  if (!scanner_ || scanner_->hit_count() == 0) {
+    return;
+  }
+  refine_undo_ = scanner_->hits();
+  have_refine_undo_ = !refine_undo_.empty();
+}
+
+void MainWindow::clear_refine_undo() {
+  refine_undo_.clear();
+  have_refine_undo_ = false;
+}
+
+void MainWindow::undo_refine() {
+  if (scanning_) {
+    write_status("Зачекайте завершення пошуку");
+    return;
+  }
+  if (!scanner_ || !have_refine_undo_ || refine_undo_.empty()) {
+    write_status("Немає відсіву для скасування");
+    return;
+  }
+  const std::size_t restored = refine_undo_.size();
+  scanner_->replace_hits(std::move(refine_undo_));
+  clear_refine_undo();
+  show_hits();
+  write_status(QString("Відсів скасовано — знову %1 збігів")
+                   .arg(static_cast<qulonglong>(restored)));
+  update_scan_controls();
+}
+
+void MainWindow::remember_launch(const QString &command) {
+  if (command.isEmpty()) {
+    return;
+  }
+  last_launch_command_ = command;
+  launch_history_.removeAll(command);
+  launch_history_.prepend(command);
+  while (launch_history_.size() > 12) {
+    launch_history_.removeLast();
+  }
+  rebuild_launch_history_menu();
+  save_settings();
+}
+
+void MainWindow::rebuild_launch_history_menu() {
+  if (launch_history_menu_ == nullptr) {
+    return;
+  }
+  launch_history_menu_->clear();
+  if (launch_history_.isEmpty()) {
+    auto *empty = launch_history_menu_->addAction("Поки порожньо");
+    empty->setEnabled(false);
+    return;
+  }
+  for (const QString &command : launch_history_) {
+    auto *action = launch_history_menu_->addAction(command);
+    connect(action, &QAction::triggered, this,
+            [this, command] { do_launch(command); });
+  }
 }
 
 QString MainWindow::format_hit_value(const ScanHit &hit) const {
@@ -1128,41 +1294,119 @@ QString MainWindow::format_hit_value(const ScanHit &hit) const {
 }
 
 void MainWindow::show_hits() {
-  if (!scanner_ || !memory_) {
+  if (!scanner_ || !memory_ || results_ == nullptr) {
     return;
   }
   constexpr int kPreview = 5000;
   const std::size_t total = scanner_->hit_count();
-  const int rows =
-      static_cast<int>(std::min(total, static_cast<std::size_t>(kPreview)));
-  results_->setRowCount(rows);
+  const QString needle =
+      hits_filter_ != nullptr ? hits_filter_->text().trimmed() : QString();
+  const bool filtering = !needle.isEmpty();
+
   const QString value_header =
       last_structure_ ? QString("Поля структури") : QString("Значення зараз");
   results_->setHorizontalHeaderLabels({"Адреса", value_header});
-  for (int row = 0; row < rows; ++row) {
-    const ScanHit hit = scanner_->hit_at(static_cast<std::size_t>(row));
-    auto *address = new QTableWidgetItem(hex_address(hit.address));
+  results_->setRowCount(0);
+
+  int shown = 0;
+  std::size_t matched = filtering ? 0 : total;
+  // Без фільтра — лише перші kPreview. З фільтром проходимо всі збіги.
+  const std::size_t scan_limit =
+      filtering ? total : std::min(total, static_cast<std::size_t>(kPreview));
+  for (std::size_t i = 0; i < scan_limit; ++i) {
+    const ScanHit hit = scanner_->hit_at(i);
+    const QString address_text = hex_address(hit.address);
+    if (filtering) {
+      bool match = address_text.contains(needle, Qt::CaseInsensitive);
+      QString value_text;
+      if (!match) {
+        value_text = format_hit_value(hit);
+        match = value_text.contains(needle, Qt::CaseInsensitive);
+      }
+      if (!match) {
+        continue;
+      }
+      ++matched;
+      if (shown >= kPreview) {
+        continue;
+      }
+      if (value_text.isEmpty()) {
+        value_text = format_hit_value(hit);
+      }
+      const int row = results_->rowCount();
+      results_->insertRow(row);
+      auto *address = new QTableWidgetItem(address_text);
+      address->setData(Qt::UserRole, static_cast<qulonglong>(hit.address));
+      results_->setItem(row, 0, address);
+      results_->setItem(row, 1, new QTableWidgetItem(value_text));
+      ++shown;
+      continue;
+    }
+    const QString value_text = format_hit_value(hit);
+    const int row = results_->rowCount();
+    results_->insertRow(row);
+    auto *address = new QTableWidgetItem(address_text);
     address->setData(Qt::UserRole, static_cast<qulonglong>(hit.address));
     results_->setItem(row, 0, address);
-    results_->setItem(row, 1, new QTableWidgetItem(format_hit_value(hit)));
+    results_->setItem(row, 1, new QTableWidgetItem(value_text));
+    ++shown;
   }
+
   if (hits_hint_ != nullptr) {
     if (total == 0) {
       hits_hint_->setText(
           "Збігів немає. Змініть умову або скиньте пошук і спробуйте знову.");
+    } else if (filtering && matched == 0) {
+      hits_hint_->setText(
+          QString("Фільтр не знайшов збігів серед %1 адрес. Очистіть поле "
+                  "фільтра вище.")
+              .arg(static_cast<qulonglong>(total)));
+    } else if (filtering) {
+      hits_hint_->setText(
+          QString("Фільтр: показано %1 з %2 (усього збігів %3). Ctrl+C — "
+                  "копіювати адреси.")
+              .arg(shown)
+              .arg(static_cast<qulonglong>(matched))
+              .arg(static_cast<qulonglong>(total)));
     } else if (total > static_cast<std::size_t>(kPreview)) {
       hits_hint_->setText(
-          QString("Показано перші %1 з %2 збігів. Подвійне клацання або "
-                  "«Додати обране ↓» — у таблицю редагування.")
+          QString("Показано перші %1 з %2 збігів. Фільтр звужує список; "
+                  "подвійне клацання або «Додати обране ↓» — у таблицю.")
               .arg(kPreview)
               .arg(static_cast<qulonglong>(total)));
     } else {
       hits_hint_->setText(
           QString("Збігів: %1. Подвійне клацання або «Додати обране ↓» — "
-                  "у таблицю редагування.")
+                  "у таблицю. Ctrl+C — копіювати адреси.")
               .arg(static_cast<qulonglong>(total)));
     }
   }
+}
+
+void MainWindow::copy_selected_hit_addresses() {
+  if (results_ == nullptr) {
+    return;
+  }
+  const auto ranges = results_->selectedRanges();
+  if (ranges.isEmpty()) {
+    write_status("Немає виділених збігів для копіювання");
+    return;
+  }
+  QStringList lines;
+  for (const QTableWidgetSelectionRange &range : ranges) {
+    for (int row = range.topRow(); row <= range.bottomRow(); ++row) {
+      auto *item = results_->item(row, 0);
+      if (item == nullptr) {
+        continue;
+      }
+      lines.append(item->text());
+    }
+  }
+  if (lines.isEmpty()) {
+    return;
+  }
+  QApplication::clipboard()->setText(lines.join('\n'));
+  write_status(QString("Скопійовано адрес: %1").arg(lines.size()));
 }
 
 void MainWindow::refresh_hit_values() {
@@ -1542,14 +1786,17 @@ void MainWindow::refresh_views() {
         "скинуто");
     return;
   }
-  const FreezeTickStats freeze = freezer_.tick(*memory_, addresses_);
-  if (freeze.read_failures > 0 || freeze.write_failures > 0) {
-    statusBar()->showMessage(
-        QString("Заморозка: активних %1 · помилок читання %2 · запису %3")
-            .arg(static_cast<qulonglong>(freeze.active))
-            .arg(static_cast<qulonglong>(freeze.read_failures))
-            .arg(static_cast<qulonglong>(freeze.write_failures)),
-        2000);
+  // Під час scan worker не пишемо freeze — менше конкуренції за process_vm_*.
+  if (!scanning_) {
+    const FreezeTickStats freeze = freezer_.tick(*memory_, addresses_);
+    if (freeze.read_failures > 0 || freeze.write_failures > 0) {
+      statusBar()->showMessage(
+          QString("Заморозка: активних %1 · помилок читання %2 · запису %3")
+              .arg(static_cast<qulonglong>(freeze.active))
+              .arg(static_cast<qulonglong>(freeze.read_failures))
+              .arg(static_cast<qulonglong>(freeze.write_failures)),
+          2000);
+    }
   }
   refresh_hit_values();
   if (table_->is_editing()) {
@@ -1673,6 +1920,10 @@ void MainWindow::update_scan_controls() {
   if (reset_button_ != nullptr) {
     reset_button_->setEnabled(have_process && !busy && session);
   }
+  const bool undo_ok = have_process && !busy && have_refine_undo_;
+  if (undo_refine_button_ != nullptr) {
+    undo_refine_button_->setEnabled(undo_ok);
+  }
 
   if (scan_action_ != nullptr) {
     scan_action_->setEnabled(have_process && !busy && !session);
@@ -1680,6 +1931,9 @@ void MainWindow::update_scan_controls() {
   }
   if (refine_action_ != nullptr) {
     refine_action_->setEnabled(have_process && !busy && refine_ok);
+  }
+  if (undo_refine_action_ != nullptr) {
+    undo_refine_action_->setEnabled(undo_ok);
   }
   if (stop_action_ != nullptr) {
     stop_action_->setEnabled(busy);
@@ -1694,6 +1948,45 @@ void MainWindow::update_scan_controls() {
   }
   if (endian_combo_ != nullptr) {
     endian_combo_->setEnabled(!busy && !session);
+  }
+
+  // M1–M4 / формула читають Scanner на UI-потоці — не під час ScanWorker.
+  const bool dumps_ok = have_process && !busy && session && !last_structure_;
+  const QString dumps_busy_tip =
+      busy ? QStringLiteral("Зачекайте завершення пошуку") : QString();
+  for (int i = 0; i < kDumpSlots; ++i) {
+    QPushButton *button = dump_buttons_[static_cast<std::size_t>(i)];
+    if (button != nullptr) {
+      button->setEnabled(dumps_ok);
+      if (busy) {
+        button->setToolTip(dumps_busy_tip);
+      }
+    }
+    QAction *action = dump_actions_[static_cast<std::size_t>(i)];
+    if (action != nullptr) {
+      action->setEnabled(dumps_ok);
+    }
+  }
+  if (formula_preset_ != nullptr) {
+    formula_preset_->setEnabled(dumps_ok);
+  }
+  if (formula_edit_ != nullptr) {
+    formula_edit_->setEnabled(dumps_ok);
+  }
+  if (formula_button_ != nullptr) {
+    formula_button_->setEnabled(dumps_ok);
+    if (busy) {
+      formula_button_->setToolTip(dumps_busy_tip);
+    } else {
+      formula_button_->setToolTip(QStringLiteral(
+          "Залишити в списку збігів лише адреси, де формула істинна"));
+    }
+  }
+  if (formula_action_ != nullptr) {
+    formula_action_->setEnabled(dumps_ok);
+  }
+  if (!busy) {
+    update_dump_indicators();
   }
 
   if (hits_hint_ != nullptr) {
@@ -2220,6 +2513,10 @@ void MainWindow::open_structure_dialog() {
 }
 
 void MainWindow::capture_dump_slot(int slot) {
+  if (scanning_) {
+    write_status("Зачекайте завершення пошуку");
+    return;
+  }
   if (!scanner_ || !memory_) {
     QMessageBox::information(this, "GameX", "Немає збігів для знімка");
     return;
@@ -2263,6 +2560,10 @@ void MainWindow::update_dump_indicators() {
 }
 
 void MainWindow::refine_by_formula() {
+  if (scanning_) {
+    write_status("Зачекайте завершення пошуку");
+    return;
+  }
   if (!scanner_ || !memory_) {
     QMessageBox::information(
         this, "GameX",
@@ -2282,18 +2583,22 @@ void MainWindow::refine_by_formula() {
                              "Кнопка «?» відкриває докладну довідку.");
     return;
   }
+  remember_refine_undo();
   std::string error;
   const ScanStatus status =
       dumps_.refine_formula(*scanner_, *memory_, last_scan_type_,
                             last_scan_endian_, formula.toStdString(), &error);
   if (!status.ok) {
+    clear_refine_undo();
     QMessageBox::warning(this, "GameX", QString::fromStdString(status.message));
+    update_scan_controls();
     return;
   }
   show_hits();
   write_status(QString("Формула «%1»: залишилось %2")
                    .arg(formula)
                    .arg(static_cast<qulonglong>(status.hit_count)));
+  update_scan_controls();
 }
 
 void MainWindow::open_dump_help() {
@@ -2398,6 +2703,7 @@ void MainWindow::detach_process(const QString &reason) {
   wait_for_scan_thread();
   scanning_ = false;
   scan_session_ = false;
+  clear_refine_undo();
   scanner_.reset();
   memory_.reset();
   limit_region_ = false;
