@@ -1,471 +1,27 @@
 #include "ui/help_dialog.hpp"
 
+#include "ui/help_content.hpp"
+
 #include <QDialogButtonBox>
 #include <QFont>
 #include <QFrame>
+#include <QHBoxLayout>
 #include <QLabel>
+#include <QLineEdit>
 #include <QListWidget>
 #include <QPalette>
 #include <QPushButton>
+#include <QShortcut>
 #include <QSplitter>
 #include <QTextBrowser>
 #include <QTextCursor>
+#include <QUrl>
 #include <QVBoxLayout>
 
 #include <algorithm>
 #include <iterator>
 
 namespace gamex {
-namespace {
-
-struct HelpSection {
-  const char *title;
-  const char *html;
-};
-
-constexpr HelpSection kSections[] = {
-    {"Огляд", R"HTML(
-<h1>Що таке GameX</h1>
-<p>GameX — програма для <b>локальних</b> ігор на Linux: ви знаходите в пам'яті процесу
-число з екрана (гроші, життя, набої…) і підставляєте своє.</p>
-<p>Звичайний порядок дій:</p>
-<ol>
-<li>Запустити гру <b>з GameX</b> (або підключити процес, якщо права дозволяють).</li>
-<li>Знайти значення → кілька разів <b>Відсіяти</b>.</li>
-<li>Додати адресу в нижню таблицю (кнопка або подвійне клацання).</li>
-<li>Змінити число / увімкнути «Тримати».</li>
-</ol>
-<div class="ok"><b>Важливо.</b> Верхній список — лише результати пошуку.
-Щоб змінити гру, рядок має бути в <b>нижній</b> таблиці.</div>
-<div class="warn"><b>Чого немає і не буде.</b> Не античит-обхід, не мережевий чит,
-не приховування процесу, не NOP/inject коду, не speedhack.
-Лише локальна пам'ять своїх SP-ігор і тестів — докладніше в розділі
-<b>«Межі»</b>.</div>
-<p>Меню: <b>Файл / Процес / Пошук / Таблиця / Інструменти / Довідка</b>.
-Далі — покрокові сценарії.</p>
-)HTML"},
-
-    {"З чого почати", R"HTML(
-<h1>З чого почати</h1>
-<ol>
-<li>Відкрийте GameX.</li>
-<li>Натисніть <b>Запустити</b> і введіть команду без оболонки
-(шлях до гри й аргументи). Наступні рази зручніше
-<b>Процес → Недавні запуски</b>. Так зазвичай можна обійтись без root.</li>
-<li>Дочекайтеся завантаження гри і числа на екрані, яке хочете змінити.</li>
-<li>Оберіть у довідці сценарій: <b>«Приклад: гроші»</b> або <b>«Життя без числа»</b>.</li>
-</ol>
-<div class="tip"><b>Доступ до пам'яті.</b>
-На Ubuntu з Yama (<code>ptrace_scope=1</code>) звичайний користувач часто
-не може читати вже відкриту гру через <b>Обрати процес</b>. Якщо гру
-запустили кнопкою <b>Запустити</b> (вона — дочірній процес GameX) —
-читання працює. З <b>root</b> (кнопка <b>З правами root</b> або
-<code>sudo -E gamex</code>) зазвичай можна підключатись і до вже відкритих
-ігор; при підключенні GameX одразу перевіряє читання.
-Не тримайте root без потреби.</div>
-<div class="tip"><b>Пароль.</b> Кнопка питає його в zenity і передає в
-<code>sudo -S</code> (не через командний рядок). На своїй машині цього
-зазвичай досить; пароль на мить є в пам'яті GameX.
-Без цього: <code>sudo -E gamex</code> у терміналі.</div>
-<p>Поки шукаєте адресу, змінюйте значення <b>в самій грі</b>.
-GameX лише порівнює пам'ять між кроками.</p>
-)HTML"},
-
-    {"Приклад: гроші", R"HTML(
-<h1>Найпростіший сценарій: змінити гроші</h1>
-<p>У грі на екрані, наприклад, <b>1500</b> монет.</p>
-<ol>
-<li>Поле <b>«Що шукати»</b> → <code>1500</code>.</li>
-<li><b>Тип</b> → «Ціле 4 байти» (найчастіший варіант для ПК-ігор).
-Якщо збігів 0 — спробуйте «Ціле 2 байти» або «Беззнакове 4 байти».</li>
-<li><b>Умова</b> → «Дорівнює».</li>
-<li><b>Порядок байтів</b> → «Молодший байт спочатку».</li>
-<li><b>Шукати</b>. Зверху з'явиться список (інколи тисячі рядків — це нормально).
-Після цього <b>Шукати</b> вимкнеться, поки не натиснете <b>Скинути пошук</b>.</li>
-<li>У грі змініть суму (купівля, підбір монети…) → нехай стане <b>1450</b>.</li>
-<li>У GameX впишіть <code>1450</code> (підпис поля стане «Нове значення») →
-<b>Відсіяти</b> (до першого пошуку кнопка вимкнена).</li>
-<li>Повторюйте «змінили в грі → нове число → Відсіяти», поки не лишиться
-<b>1–5</b> адрес. Якщо відсіяли зайве — <b>Скасувати відсів</b> (один крок).</li>
-<li>Виділіть їх → <b>Додати обране ↓</b> або подвійне клацання по рядку.
-За потреби спочатку відфільтруйте список зверху або скопіюйте адреси (Ctrl+C).</li>
-<li>У нижній таблиці в <b>«Значення → у гру»</b> введіть <code>99999</code> і
-натисніть <b>Enter</b>. Подивіться в гру.</li>
-</ol>
-<div class="ok">Якщо число одразу відкочується — увімкніть галочку <b>«Тримати»</b>
-у тому ж рядку (розділ «Заморозка»).</div>
-<div class="tip"><b>Чому так багато збігів спочатку?</b>
-Число на кшталт 100 або 1500 зустрічається в пам'яті скрізь: таймери, масиви, сміття.
-Відсів після <b>реальної</b> зміни в грі відкидає зайве. Між відсівами робіть
-одну зрозумілу зміну, а не десять підряд.</div>
-<h2>Якщо «не те» значення</h2>
-<ul>
-<li>Змінили в таблиці — в грі нічого → перевірте, що рядок у <b>низу</b>,
-тип правильний, Enter натиснуто, адреса не червона.</li>
-<li>У грі змінилося, але після бою/збереження знову старе → це «копія»;
-продовжіть відсів або шукайте глибше (інший тип / невідоме значення).</li>
-</ul>
-)HTML"},
-
-    {"Життя без числа", R"HTML(
-<h1>Смужка життя (числа на екрані немає)</h1>
-<p>Коли видно лише смужку HP/мани без цифр:</p>
-<ol>
-<li><b>Умова</b> → «Невідоме значення» (число вводити не потрібно).</li>
-<li><b>Шукати</b> — GameX зніме знімок пам'яті (може зайняти час; є <b>Стоп</b>).</li>
-<li>Отримайте удар / витратьте ресурс у грі.</li>
-<li><b>Умова</b> → «Змінилось» → <b>Відсіяти</b>.</li>
-<li>Якщо смужка стоїть — «Не змінилось» + Відсіяти (відкидає те, що смикається саме).</li>
-<li>Лікування → «Зросло»; удар → «Зменшилось».</li>
-<li>Коли адрес мало — <b>Додати обране</b> і спробуйте велике значення внизу.</li>
-</ol>
-<div class="tip">Чергуйте «змінилось» і «не змінилось»: спочатку змусьте смужку
-змінитись, потім кілька секунд постійте без змін і відсійте «не змінилось» —
-так швидше відпадає сміття.</div>
-<p>Після того як знайшли адресу, далі працює як зі звичайним числом:
-заморозка, збереження в <code>.gxt</code>, прив'язка до модуля.</p>
-)HTML"},
-
-    {"Вікно програми", R"HTML(
-<h1>Як влаштоване вікно</h1>
-<h2>Меню</h2>
-<p><b>Файл</b> (зберегти/завантажити <code>.gxt</code>), <b>Процес</b>, <b>Пошук</b>,
-<b>Таблиця</b>, <b>Інструменти</b>, <b>Довідка</b> (ця довідка, «Про програму», «Про Qt»).
-Більшість дій є і кнопками; лише в меню: <b>Від'єднати процес</b>,
-<b>Недавні запуски</b>, гарячі клавіші F5–F8 для таблиці.</p>
-<h2>Зверху — процес і пошук</h2>
-<ul>
-<li><b>Обрати процес</b> — уже запущена програма. Фільтри: користувачі входу,
-лише мій UID, лише програми з панелі задач (вікна оболонки через X11).
-Галочки й текст пошуку в діалозі запам'ятовуються між сесіями.
-Колонка «Потоки» — скільки потоків у процесі
-(окремі TID у /proc на сучасних ядрах уже не показуються).
-При підключенні перевіряється читання пам'яті.</li>
-<li><b>Запустити</b> — команда без оболонки; гра — дочірній процес (краще без root).
-Остання команда підставляється знову; історія — <b>Процес → Недавні запуски</b>.</li>
-<li><b>З правами root</b> — окремий GameX (пароль у zenity → <code>sudo</code>).
-Або в терміналі: <code>sudo -E gamex</code>.</li>
-<li><b>Блок пам'яті</b> — шукати не всю гру, а один регіон.</li>
-<li><b>Емулятор</b> / <b>База RAM</b> — ігри приставок (див. розділ).</li>
-<li><b>Знімки M1–M4</b> — блок під пошуком, за замовчуванням згорнутий
-(галочка в заголовку). Під час активного пошуку кнопки M і формула вимкнені.</li>
-</ul>
-<h2>Шукати / Відсіяти / Скинути / Скасувати</h2>
-<ul>
-<li>До першого успішного пошуку <b>Відсіяти</b> вимкнене.</li>
-<li>Після пошуку активна <b>сесія</b>: головна дія — <b>Відсіяти</b>;
-кнопка пошуку стає «Новий пошук» і вимкнена, доки не <b>Скинути пошук</b>.</li>
-<li><b>Скасувати відсів</b> (Ctrl+Z) — повернути список збігів на один крок назад
-(після «Відсіяти» або «Відсіяти формулою»). Новий пошук / скидання / зміна процесу
-очищають цей крок.</li>
-<li>Тип і порядок байтів на час сесії заблоковані.</li>
-<li>Під час довгого пошуку заморозка адрес у нижній таблиці на паузі
-(щоб не конкурувати з читанням пам'яті).</li>
-</ul>
-<h2>Дві таблиці</h2>
-<ul>
-<li><b>Верхня</b> — результати поточного пошуку. Сама по собі гру не змінює.
-Над нею — <b>фільтр</b> за адресою або значенням; <b>Ctrl+C</b> або ПКМ —
-копіювати виділені адреси. Показується до 5000 рядків (решту звужуйте відсівом
-або фільтром).</li>
-<li><b>Нижня</b> — ваш набір адрес: тут пишете значення і вмикаєте «Тримати».</li>
-</ul>
-<div class="ok">Подвійне клацання по верхньому рядку = <b>Додати обране ↓</b>.</div>
-<p>Смуга прогресу і <b>Стоп</b> — під час довгого пошуку.
-<b>Скинути пошук</b> очищає верх, знімок і M1–M4; низ (таблиця адрес) лишається.
-Розмір вікна й роздільник таблиць запам'ятовуються.</p>
-)HTML"},
-
-    {"Нижня таблиця", R"HTML(
-<h1>Нижня таблиця — керування грою</h1>
-<ul>
-<li><b>Тримати</b> — періодично підставляти запам'ятоване значення (заморозка).</li>
-<li><b>Режим</b> — як саме тримати (див. «Заморозка»).</li>
-<li><b>Група / Опис</b> — ваші позначки («Гравець», «Золото»). Фільтр над таблицею
-шукає за цими текстами.</li>
-<li><b>Прив'язка</b> — як знайти адресу після нового запуску:
-<code>абс.</code>, <code>module+зсув</code>, вказівник або <code>gba@0x…</code>.</li>
-<li><b>Адреса</b> — поточна адреса в процесі Linux. Червона = прив'язка не розв'язалась.</li>
-<li><b>Тип</b> — як інтерпретувати байти (має збігатися з тим, що шукали).</li>
-<li><b>Мін / Макс</b> — для режиму «У межах».</li>
-<li><b>Значення → у гру</b> — ввели число + <b>Enter</b> = запис у пам'ять.</li>
-</ul>
-<p><b>Прибрати</b> видаляє рядки з таблиці GameX, не з гри.</p>
-<div class="tip">Спочатку переконайтесь, що зміна значення внизу реально впливає на екран гри,
-і лише потім вмикайте «Тримати» і зберігайте <code>.gxt</code>.</div>
-)HTML"},
-
-    {"Заморозка", R"HTML(
-<h1>Заморозка (галочка «Тримати»)</h1>
-<p>Гра сама постійно переписує життя, патрони, таймери.
-Заморозка змушує GameX раз на частку секунди повертати ваше значення.</p>
-<ul>
-<li><b>Утримати</b> — жорстко тримати запам'ятоване число (класичні «нескінченні гроші»).</li>
-<li><b>Може зрости</b> — якщо в грі стало більше, прийняти нове; якщо менше — відкотити.
-Зручно для рахунку, який має лише рости.</li>
-<li><b>Може спасти</b> — дзеркально: дозволяємо лише зменшення.</li>
-<li><b>У межах</b> — тримати між Мін і Макс (заповніть обидва поля текстами чисел).</li>
-</ul>
-<div class="warn">Працює лише поки відкриті GameX і підключений процес.
-Це не правка файлу збереження і не чит для онлайн-матчу.</div>
-<p><b>F8</b> запам'ятовує <i>поточне</i> значення з гри як те, що треба тримати.</p>
-<div class="warn">«Тримати» вмикається лише після <b>успішного читання</b> адреси.
-Червоні (нерозв'язані) рядки і F5/F6 не пишуть у застарілу адресу.</div>
-)HTML"},
-
-    {"Клавіші", R"HTML(
-<h1>Гарячі клавіші</h1>
-<p>Працюють, коли вікно GameX у фокусі (є також у меню <b>Таблиця</b> / <b>Довідка</b>):</p>
-<ul>
-<li><b>F5</b> — увімкнути / вимкнути «Тримати» для виділених рядків.</li>
-<li><b>F6</b> — ввести нове значення і записати в гру.</li>
-<li><b>F7</b> — циклічно змінити режим заморозки.</li>
-<li><b>F8</b> — запам'ятати поточне значення з пам'яті процесу.</li>
-<li><b>F1</b> — ця довідка.</li>
-</ul>
-<p>Глобальних клавіш «поверх гри» немає — перемикайтесь на GameX
-або грайте у віконному режимі.</p>
-)HTML"},
-
-    {"Поля пошуку", R"HTML(
-<h1>Що означають поля пошуку</h1>
-<ul>
-<li><b>Що шукати</b> — число з екрана. Також:
-  <ul>
-  <li>вираз: <code>100*10</code> → шукає 1000;</li>
-  <li>hex: <code>64h</code> або <code>0x64</code> (= 100);</li>
-  <li>байти з маскою: <code>DE ?? AD</code> (<code>??</code> = будь-який байт).</li>
-  </ul>
-</li>
-<li><b>Тип</b> — скільки байтів займає значення. Не знаєте → «Ціле 4 байти».
-Координати / відсотки інколи «Дріб 4 байти» (можна писати <code>12,5</code>).</li>
-<li><b>Умова</b>:
-  <ul>
-  <li>перший пошук: «Дорівнює», «Діапазон», «Невідоме значення»…</li>
-  <li>відсів: «Зросло / Зменшилось», «Зросло на… / Зменшилось на…»
-  (рівно на N), «Змінилось / Не змінилось» або знову рівність.</li>
-  </ul>
-</li>
-<li><b>Ще параметри</b> — порядок байтів, крок адреси, макс. регіон,
-лише записувані (зазвичай не чіпайте).</li>
-<li><b>Крок адреси</b> — <i>не</i> значення з гри, а крок перебору адрес
-(для 4-байтового цілого зазвичай 4). Менший крок = довший пошук.</li>
-<li><b>Макс. регіон</b> — пропускати величезні шматки пам'яті.
-512 МБ — розумний старт; <code>0</code> — без ліміту.</li>
-<li><b>Лише записувані</b> — шукати там, куди гра може писати (залиште увімкненим).</li>
-</ul>
-<div class="tip"><b>Діапазон.</b> Умова «Діапазон»: у полі значення — низ,
-у полі «до» — верх (обидва включно). Зручно, коли точне число стрибає.</div>
-)HTML"},
-
-    {"Зберегти .gxt", R"HTML(
-<h1>Зберегти набір адрес (.gxt)</h1>
-<ol>
-<li>Коли нижня таблиця працює — <b>Зберегти .gxt</b>.</li>
-<li>Наступного разу: <b>Запустити</b> гру з GameX → <b>Завантажити .gxt</b>.</li>
-<li>Якщо рядки <span class="bad">червоні</span> — адреса «протухла»
-(див. «Після перезапуску»).</li>
-</ol>
-<p>Файл текстовий: його можна відкрити в редакторі, але зручніше правити в GameX.
-Прив'язки модуля, вказівники й гостьові адреси емулятора теж зберігаються в <code>.gxt</code>.</p>
-)HTML"},
-
-    {"Після перезапуску", R"HTML(
-<h1>Щоб адреса працювала після нового запуску</h1>
-<p>Після кожного старту Linux майже завжди дає грі <b>інші</b> абсолютні адреси (ASLR).
-Стара «гола» адреса з минулого разу часто вже марна.</p>
-<ol>
-<li>Виділіть робочий рядок у нижній таблиці.</li>
-<li><b>До модуля</b> — прив'язка «ім'я модуля + зсув». Часто вистачає для статичних змінних
-у коді/даних гри.</li>
-<li>Якщо значення в купі (динамічна пам'ять) — <b>Вказівник…</b>:
-пошук ланцюжка від модуля до вашої адреси (глибина 1–4).</li>
-</ol>
-<div class="tip"><b>Вказівник…</b> шукає лише <i>статичні</i> слоти в модулях.
-Якщо вказівник існує лише в купі і ніде не збережений у модулі — цим пошуком його не знайти.
-Тоді після рестарту знову знайдіть значення відсівом і оновіть таблицю.</div>
-<div class="warn"><b>Червона адреса</b> = модуль не знайдено (інша версія гри, інший шлях,
-гра ще вантажиться). Запис і заморозка для такого рядка вимкнені,
-доки прив'язка знову не розв'яжеться (перезапустіть гру з GameX і зачекайте меню).</div>
-)HTML"},
-
-    {"Формули M1–M4", R"HTML(
-<h1>Знімки M1–M4 і формула</h1>
-<p>Звичайне <b>Відсіяти</b> порівнює «зараз» із попереднім кроком.
-Кнопки <b>M1…M4</b> — це <b>збережені копії значень</b> на збігах у вибраний момент,
-щоб порівняти <b>кілька станів одразу</b> однією умовою.</p>
-
-<h2>Як користуватись</h2>
-<ol>
-<li>Знайдіть число звичайним пошуком і трохи відсійте список
-(краще не залишати мільйони адрес).</li>
-<li>Натисніть <b>M1</b> — запам'ятати поточні значення. Кнопка стане <b>M1✓</b>.</li>
-<li>Змініть значення <b>в грі</b> (витратьте гроші, втратьте життя…).</li>
-<li>За бажанням натисніть <b>Відсіяти</b> (зменшило — / збільшило —),
-потім <b>M2</b> — другий знімок.</li>
-<li>Оберіть шаблон формули або впишіть свою, наприклад
-<code>M1&lt;&gt;M2</code> («значення змінилось між знімками»).</li>
-<li><b>Відсіяти формулою</b> — лишаються лише адреси, де вираз істинний.</li>
-</ol>
-
-<h2>Приклади формул</h2>
-<ul>
-<li><code>M1&lt;&gt;M2</code> — змінилось між M1 і M2.</li>
-<li><code>(M1&lt;&gt;M2)and(M2=M3)</code> — змінилось, потім стабільно
-(корисно, коли значення «стрибнуло» і завмерло).</li>
-<li><code>(M1&lt;&gt;M2)and(M1=M3)</code> — змінилось, потім повернулось
-як у M1.</li>
-<li><code>M2&gt;M1</code> — у M2 більше, ніж у M1.</li>
-</ul>
-
-<div class="warn">Якщо формула згадує <code>M2</code>, а знімок M2 ще не збережено —
-буде помилка. Спочатку натисніть потрібні <b>M</b> (з ✓).</div>
-<p>Оператори: <code>+ - * /</code>, <code>AND OR XOR NOT</code> (побітові),
-<code>SHL SHR MOD</code>, порівняння <code>= &lt;&gt; &lt; &gt;</code>, дужки.</p>
-<div class="tip">Спочатку звичайний відсів — формули по гігантському списку рідко потрібні.
-Після пошуку <b>структури</b> знімки M не використовуються.
-Під час фонового пошуку/відсіву M1–M4 і «Відсіяти формулою» недоступні —
-зачекайте завершення.</div>
-<p>Після вдалої формули можна <b>Скасувати відсів</b>, щоб повернути попередній
-список збігів (один крок).</p>
-)HTML"},
-
-    {"Структура", R"HTML(
-<h1>Структура персонажа</h1>
-<p>Якщо поруч у пам'яті лежать кілька полів одного об'єкта
-(наприклад життя @0, дірка 4 байти, золото @8):</p>
-<ol>
-<li>Знайдіть поля окремо і додайте їх у нижню таблицю.</li>
-<li>Виділіть ці рядки → <b>Структура…</b> → <b>З таблиці</b>
-(чорновик зі зсувами від найменшої адреси).</li>
-<li>Перевірте зсуви, типи й значення → кнопка пошуку в діалозі.</li>
-<li>Після знаходження бази «Додати обране» розгорне всі поля структури в таблицю.</li>
-</ol>
-<p>Дірки між полями дозволені: не потрібно описувати кожен байт padding.</p>
-<div class="warn">Адреси для чорновика мають лежати не далі ніж ~4 КіБ одна від одної
-і бути розв'язаними (не червоними).</div>
-)HTML"},
-
-    {"Hex і хто пише", R"HTML(
-<h1>Hex… і «Хто пише…»</h1>
-<h2>Hex…</h2>
-<p>Перегляд байтів навколо адреси. Можна змінити один байт вручну.</p>
-<h2>Хто пише…</h2>
-<p>Апаратний watchpoint через <code>ptrace</code>: процес зупиняється на записі
-в адресу.</p>
-<ol>
-<li>Без root краще, якщо гру відкрито через <b>Запустити</b>. З root
-<code>ptrace</code> часто працює і для інших процесів (як дозволяє ядро).</li>
-<li>Виділіть адресу → <b>Хто пише…</b> → <b>Чекати запис</b>.</li>
-<li>Грайте, доки значення не зміниться — з'явиться звіт.</li>
-<li><b>Крок</b> / <b>До ret</b> — далі по коду. Закрийте діалог, коли закінчите.</li>
-</ol>
-<div class="warn">На x86_64 у звіті <b>RIP — наступна інструкція після запису</b>,
-а не та, що писала. Нові потоки теж відстежуються (TRACECLONE).
-Поки процес зупинений, гра «замирає». NOP GameX не ставить. До 4 точок
-одночасно.</div>
-<p>З Capstone показується мнемоніка; без нього — лише байти.</p>
-)HTML"},
-
-    {"Емулятори", R"HTML(
-<h1>Емулятори приставок</h1>
-<ol>
-<li>Запустіть емулятор (краще з GameX) і завантажте гру так, щоб вона бігла.</li>
-<li>Список <b>Емулятор</b> → профіль (GBA, SNES, N64…).</li>
-<li><b>База RAM</b> — шукає rw-регіони за розміром і (м'яко) за підказкою шляху.
-Якщо кандидатів кілька — оберіть зі списку (видно pathname).
-Обраний блок стає поточною областю пошуку.</li>
-<li>Шукайте як у звичайній грі; адреси в таблиці можуть зберігатись як
-<b>гостьові</b> (<code>gba@0x…</code>).</li>
-</ol>
-<div class="tip">Якщо база «не знайдена» — гра ще не в RAM, інший профіль,
-або вручну <b>Блок пам'яті</b>. Для N64 часто «старший байт спочатку» —
-профіль виставить сам.</div>
-)HTML"},
-
-    {"Не працює?", R"HTML(
-<h1>Типові проблеми</h1>
-<ul>
-<li><b>Немає доступу при підключенні.</b>
-Без root: <b>Запустити</b> гру з GameX. Або <b>З правами root</b>
-(чи <code>sudo -E gamex</code>) і знову <b>Обрати процес</b>.</li>
-<li><b>«Відсіяти» сіре.</b>
-Спочатку потрібен успішний <b>Шукати</b> (або знімок «Невідоме значення»).
-Після структури — спочатку <b>Скинути пошук</b>.</li>
-<li><b>«Шукати» сіре / «Новий пошук».</b>
-Сесія активна — натисніть <b>Скинути пошук</b>, щоб почати з нуля
-(не плутати зі <b>Скасувати відсів</b>, яке лише відкочує останній відсів).</li>
-<li><b>Змінив значення — у грі тиша.</b>
-Рядок у <b>нижній</b> таблиці? Enter? Адреса не червона?</li>
-<li><b>Значення одразу відкочується.</b>
-Увімкніть «Тримати» або продовжіть відсів.</li>
-<li><b>Занадто багато збігів.</b>
-Нормально на першому проході — відсівайте; звузьте блок пам'яті.</li>
-<li><b>Після рестарту гри мертво.</b>
-<b>До модуля</b> / <b>Вказівник…</b> або знайдіть знову.</li>
-<li><b>Емулятор: кілька RAM / не та база.</b>
-Оберіть кандидата за pathname у діалозі після <b>База RAM</b>.</li>
-</ul>
-)HTML"},
-
-    {"Для розробників", R"HTML(
-<h1>Для розробників / Contributors</h1>
-<p>Повна довідка — файл <code>CONTRIBUTING.md</code> у репозиторії
-(після встановлення також у документації пакета, поруч із README).</p>
-<h2>Швидко</h2>
-<ul>
-<li><b>Ядро без Qt:</b> <code>src/core/</code> → бібліотека <code>gamex_core</code>.</li>
-<li><b>Інтерфейс:</b> <code>src/ui/</code> + <code>ScanWorker</code> у окремому потоці.</li>
-<li><b>Тести:</b> <code>tests/test_core.cpp</code> —
-<code>cmake --build build &amp;&amp; ctest --test-dir build</code>.</li>
-<li>Під час пошуку не чіпайте <code>Scanner</code> з UI-потоку
-(M1–M4 / формула вже блокуються).</li>
-</ul>
-<h2>Що не приймаємо</h2>
-<p>Партії з обходом античиту, мережевим читом, приховуванням процесу,
-NOP/inject, speedhack — відхиляються. Див. розділ <b>«Межі»</b>.</p>
-<div class="tip">Зміни в поведінці для користувача — оновіть README і цю довідку
-в тому ж патчі.</div>
-)HTML"},
-
-    {"Межі", R"HTML(
-<h1>Чого немає і не буде</h1>
-<p>GameX — локальний редактор <b>значень у пам'яті</b> процесу на Linux.
-Читання/запис через звичайні виклики ядра (<code>process_vm_*</code>,
-за потреби <code>ptrace</code>). Права визначає Yama + uid/capabilities.</p>
-<p><b>Це є:</b> пошук і відсів чисел, таблиця адрес, заморозка, <code>.gxt</code>,
-вказівники/модулі, структури, hex, «Хто пише…» (спостереження, без патчу коду),
-профілі емуляторів.</p>
-<p><b>Цього немає і не планується додавати:</b></p>
-<ul>
-<li><b>Обхід античиту</b> — немає приховування GameX, драйверів ядра,
-патчів захисту гри чи клієнта.</li>
-<li><b>Мережевий / онлайн-чит</b> — немає хаку пакетів, клієнт–серверних
-обходів, інструментів для чужих матчів і сервісів.</li>
-<li><b>Приховування процесу</b> — GameX видно в системі як звичайна програма.</li>
-<li><b>NOP / підміна коду / inject</b> — немає запису інструкцій у код гри.
-У «Хто пише…» NOP теж <b>не</b> ставиться: лише звіт і крок по коду.</li>
-<li><b>Speedhack</b> — немає прискорення чи уповільнення часу/таймерів гри.</li>
-</ul>
-<div class="warn">Онлайн-матчі й захищені ігри — не ціль продукту.
-Порушення правил сервісу чи закону — на вашій відповідальності.</div>
-<p>Користуйтесь для <b>власних</b> однокористувацьких ігор і своїх програм.</p>
-)HTML"},
-
-    {"Ліцензія", R"HTML(
-<h1>Ліцензія</h1>
-<p>GameX розповсюджується на умовах <b>GNU General Public License версії 3</b>
-(або, за вашим вибором, пізнішої версії). Повний текст — файл <code>LICENSE</code>
-у каталозі проєкту.</p>
-<p>Сторонні залежності (Qt Widgets/Core/Gui — зазвичай LGPL/GPL відкритої збірки Qt;
-опційний Capstone — BSD) описані у файлі <code>NOTICE</code>.
-Ліцензії бібліотек не замінюють GPL для коду GameX — дотримуйтесь і їхніх умов.</p>
-<div class="tip">Можна користуватись і ділитись програмою за GPL.
-Якщо змінюєте код і поширюєте збірку — зміни теж мають бути під GPL.</div>
-)HTML"},
-};
-
-} // namespace
 
 QString HelpDialog::page_chrome(const QString &body_html) {
   return QStringLiteral(
@@ -490,7 +46,8 @@ QString HelpDialog::page_chrome(const QString &body_html) {
              ".ok{background:#d8e8d8;border:1px solid #8bbb8b;}"
              ".tip b,.warn b,.ok b{color:#12151a;}"
              ".bad{color:#a02020;font-weight:600;}"
-             "a{color:#1a5f9e;}"
+             "a{color:#1a5f9e;text-decoration:none;}"
+             "a:hover{text-decoration:underline;}"
              "</style></head><body>%1</body></html>")
       .arg(body_html);
 }
@@ -503,9 +60,10 @@ HelpDialog::HelpDialog(const QString &section_title, QWidget *parent)
 }
 
 int HelpDialog::section_index_by_title(const QString &title) {
-  for (int i = 0; i < static_cast<int>(std::size(kSections)); ++i) {
-    if (title ==
-        QString::fromUtf8(kSections[static_cast<std::size_t>(i)].title)) {
+  const HelpSection *sections = help_sections();
+  const int count = static_cast<int>(help_section_count());
+  for (int i = 0; i < count; ++i) {
+    if (title == QString::fromUtf8(sections[i].title)) {
       return i;
     }
   }
@@ -514,10 +72,9 @@ int HelpDialog::section_index_by_title(const QString &title) {
 
 void HelpDialog::finish_setup(int initial_row) {
   setWindowTitle("Довідка GameX");
-  resize(960, 700);
-  setMinimumSize(720, 480);
+  resize(1020, 740);
+  setMinimumSize(760, 520);
 
-  // Єдина палітра діалогу — не залежить від темної теми ОС.
   QPalette dlg = palette();
   dlg.setColor(QPalette::Window, QColor(0x2a2f38));
   dlg.setColor(QPalette::WindowText, QColor(0xe8eaed));
@@ -536,10 +93,23 @@ void HelpDialog::finish_setup(int initial_row) {
     f.setBold(true);
     title->setFont(f);
   }
-  title->setStyleSheet("color:#e8eaed; padding: 4px 2px 8px 2px;");
+  title->setStyleSheet("color:#e8eaed; padding: 4px 2px 4px 2px;");
+
+  auto *subtitle = new QLabel(
+      "Оберіть кейс зліва. Посилання в тексті відкривають інший розділ.",
+      this);
+  subtitle->setWordWrap(true);
+  subtitle->setStyleSheet("color:#9aa3ad; padding: 0 2px 8px 2px; font-size:12px;");
+
+  nav_filter_ = new QLineEdit(this);
+  nav_filter_->setPlaceholderText("Фільтр розділів…");
+  nav_filter_->setClearButtonEnabled(true);
+  nav_filter_->setStyleSheet(
+      "QLineEdit { background:#1c2128; color:#e8eaed; border:1px solid #3a424e;"
+      "  border-radius:4px; padding:6px 8px; }");
 
   nav_ = new QListWidget(this);
-  nav_->setFixedWidth(220);
+  nav_->setMinimumWidth(240);
   nav_->setStyleSheet("QListWidget {"
                       "  background:#232830; color:#d4d8de; border:none;"
                       "  outline:none; font-size:14px; padding:6px 0;"
@@ -553,12 +123,17 @@ void HelpDialog::finish_setup(int initial_row) {
                       "QListWidget::item:hover:!selected {"
                       "  background:#2f3640;"
                       "}");
-  for (const HelpSection &section : kSections) {
-    nav_->addItem(QString::fromUtf8(section.title));
+  const HelpSection *sections = help_sections();
+  const int count = static_cast<int>(help_section_count());
+  for (int i = 0; i < count; ++i) {
+    auto *item = new QListWidgetItem(QString::fromUtf8(sections[i].title));
+    item->setData(Qt::UserRole, i);
+    nav_->addItem(item);
   }
 
   browser_ = new QTextBrowser(this);
   browser_->setOpenExternalLinks(false);
+  browser_->setOpenLinks(false);
   browser_->setFrameShape(QFrame::NoFrame);
   {
     QPalette pal = browser_->palette();
@@ -572,6 +147,16 @@ void HelpDialog::finish_setup(int initial_row) {
     browser_->setFont(font);
   }
 
+  page_find_ = new QLineEdit(this);
+  page_find_->setPlaceholderText("Знайти на сторінці… (Enter)");
+  page_find_->setClearButtonEnabled(true);
+  auto *find_button = new QPushButton("Знайти", this);
+  find_button->setToolTip("Шукати далі на цій сторінці (як Ctrl+F)");
+
+  auto *find_row = new QHBoxLayout();
+  find_row->addWidget(page_find_, 1);
+  find_row->addWidget(find_button);
+
   auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, this);
   buttons->button(QDialogButtonBox::Close)->setText("Закрити");
   buttons->setStyleSheet("QPushButton { background:#3a424e; color:#e8eaed; "
@@ -579,16 +164,36 @@ void HelpDialog::finish_setup(int initial_row) {
                          "  padding:6px 16px; border-radius:4px; }"
                          "QPushButton:hover { background:#4a5462; }");
 
-  connect(nav_, &QListWidget::currentRowChanged, this,
-          &HelpDialog::show_section);
+  connect(nav_, &QListWidget::currentItemChanged, this,
+          [this](QListWidgetItem *current, QListWidgetItem *) {
+            if (current == nullptr) {
+              return;
+            }
+            show_section(current->data(Qt::UserRole).toInt());
+          });
+  connect(nav_filter_, &QLineEdit::textChanged, this,
+          &HelpDialog::filter_nav);
+  connect(find_button, &QPushButton::clicked, this, &HelpDialog::find_in_page);
+  connect(page_find_, &QLineEdit::returnPressed, this,
+          &HelpDialog::find_in_page);
+  connect(browser_, &QTextBrowser::anchorClicked, this,
+          &HelpDialog::on_anchor);
   connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
   connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
+
+  auto *find_shortcut = new QShortcut(QKeySequence::Find, this);
+  connect(find_shortcut, &QShortcut::activated, this, [this] {
+    page_find_->setFocus();
+    page_find_->selectAll();
+  });
 
   auto *left = new QWidget(this);
   auto *left_layout = new QVBoxLayout(left);
   left_layout->setContentsMargins(10, 10, 4, 10);
   left_layout->setSpacing(4);
   left_layout->addWidget(title);
+  left_layout->addWidget(subtitle);
+  left_layout->addWidget(nav_filter_);
   left_layout->addWidget(nav_, 1);
 
   auto *right = new QWidget(this);
@@ -596,6 +201,7 @@ void HelpDialog::finish_setup(int initial_row) {
   right_layout->setContentsMargins(4, 10, 10, 10);
   right_layout->setSpacing(8);
   right_layout->addWidget(browser_, 1);
+  right_layout->addLayout(find_row);
   right_layout->addWidget(buttons, 0, Qt::AlignRight);
 
   auto *split = new QSplitter(Qt::Horizontal, this);
@@ -610,15 +216,113 @@ void HelpDialog::finish_setup(int initial_row) {
   root->setContentsMargins(0, 0, 0, 0);
   root->addWidget(split);
 
-  const int row = std::clamp(initial_row, 0, std::max(0, nav_->count() - 1));
-  nav_->setCurrentRow(row);
+  const int safe =
+      std::clamp(initial_row, 0, std::max(0, count - 1));
+  for (int row = 0; row < nav_->count(); ++row) {
+    if (nav_->item(row)->data(Qt::UserRole).toInt() == safe) {
+      nav_->setCurrentRow(row);
+      break;
+    }
+  }
+  if (nav_->currentRow() < 0 && nav_->count() > 0) {
+    nav_->setCurrentRow(0);
+  }
+}
+
+void HelpDialog::filter_nav(const QString &needle) {
+  const QString n = needle.trimmed();
+  int first_visible = -1;
+  for (int row = 0; row < nav_->count(); ++row) {
+    QListWidgetItem *item = nav_->item(row);
+    const bool match =
+        n.isEmpty() || item->text().contains(n, Qt::CaseInsensitive);
+    item->setHidden(!match);
+    if (match && first_visible < 0) {
+      first_visible = row;
+    }
+  }
+  if (nav_->currentItem() != nullptr && nav_->currentItem()->isHidden() &&
+      first_visible >= 0) {
+    nav_->setCurrentRow(first_visible);
+  }
+}
+
+void HelpDialog::find_in_page() {
+  if (browser_ == nullptr || page_find_ == nullptr) {
+    return;
+  }
+  const QString text = page_find_->text();
+  if (text.isEmpty()) {
+    return;
+  }
+  if (!browser_->find(text)) {
+    browser_->moveCursor(QTextCursor::Start);
+    browser_->find(text);
+  }
+}
+
+void HelpDialog::on_anchor(const QUrl &url) {
+  if (url.scheme() != QStringLiteral("gamex")) {
+    return;
+  }
+  QString id = url.path();
+  if (id.startsWith(QLatin1Char('/'))) {
+    id = id.mid(1);
+  }
+  if (id.isEmpty()) {
+    id = url.host();
+  }
+  if (id.isEmpty()) {
+    id = url.toString(QUrl::RemoveScheme);
+    while (id.startsWith(QLatin1Char(':')) || id.startsWith(QLatin1Char('/'))) {
+      id = id.mid(1);
+    }
+  }
+  id = QUrl::fromPercentEncoding(id.toUtf8()).trimmed();
+
+  static const struct {
+    const char *link;
+    const char *title;
+  } kMap[] = {
+      {"start", "З чого почати"},
+      {"lists", "Два списки"},
+      {"money", "Кейс: гроші"},
+      {"bar", "Кейс: смужка життя"},
+      {"sequence", "Кейс: кілька ресурсів"},
+      {"freeze", "Тримати значення"},
+      {"gxt", "Зберегти .gxt"},
+      {"aslr", "Після перезапуску"},
+      {"structure", "Структура"},
+      {"keys", "Клавіші"},
+      {"limits", "Межі"},
+  };
+  QString title = id;
+  for (const auto &entry : kMap) {
+    if (id == QLatin1String(entry.link)) {
+      title = QString::fromUtf8(entry.title);
+      break;
+    }
+  }
+
+  const int index = section_index_by_title(title);
+  for (int row = 0; row < nav_->count(); ++row) {
+    QListWidgetItem *item = nav_->item(row);
+    if (item->data(Qt::UserRole).toInt() == index) {
+      if (item->isHidden() && nav_filter_ != nullptr) {
+        nav_filter_->clear();
+      }
+      nav_->setCurrentRow(row);
+      return;
+    }
+  }
 }
 
 void HelpDialog::show_section(int index) {
-  if (index < 0 || index >= static_cast<int>(std::size(kSections))) {
+  const int count = static_cast<int>(help_section_count());
+  if (index < 0 || index >= count) {
     return;
   }
-  const HelpSection &section = kSections[static_cast<std::size_t>(index)];
+  const HelpSection &section = help_sections()[index];
   browser_->setHtml(page_chrome(QString::fromUtf8(section.html)));
   browser_->moveCursor(QTextCursor::Start);
 }

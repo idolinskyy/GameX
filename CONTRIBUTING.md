@@ -82,15 +82,16 @@ ctest --test-dir build --output-on-failure
 
 ## Типові місця правок
 
-| Задача                           | Куди дивитись                                             |
-| -------------------------------- | --------------------------------------------------------- |
-| Умови пошуку / відсів            | `value_codec`, `scanner`, `search_value`                  |
-| Читання процесів / Yama / панель | `process_memory`                                          |
-| Формули M1–M4                    | `dump_book`, `expression`                                 |
-| Заморозка                        | `freezer`, таймер у `main_window`                         |
-| `.gxt`                           | `address_table`                                           |
-| Новий діалог                     | `src/ui/*_dialog.*` + меню в `main_window`                |
-| Версія / «Про програму»          | `cmake/write_build_info.cmake`, `gamex_build_info.hpp.in` |
+| Задача                           | Куди дивитись                                                 |
+| -------------------------------- | ------------------------------------------------------------- |
+| Умови пошуку / відсів            | `value_codec`, `scanner`, `search_value`                      |
+| Читання процесів / Yama / панель | `process_memory`                                              |
+| Формули M1–M4                    | `dump_book`, `expression`                                     |
+| Послідовність значень            | `make_sequence_structure` (`search_value`), `sequence_dialog` |
+| Заморозка                        | `freezer`, таймер у `main_window`                             |
+| `.gxt`                           | `address_table`                                               |
+| Новий діалог                     | `src/ui/*_dialog.*` + меню в `main_window`                    |
+| Версія / «Про програму»          | `cmake/write_build_info.cmake`, `gamex_build_info.hpp.in`     |
 
 ## Документація
 

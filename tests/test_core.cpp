@@ -211,6 +211,27 @@ void test_self_memory() {
   }
   expect(found, "increased-by filter keeps the slot");
 
+  *slot = needle + 1 + 7 - 3;
+  gamex::ScanQuery shrunk_by;
+  shrunk_by.type = gamex::ValueType::Int32;
+  shrunk_by.endian = gamex::Endian::Little;
+  shrunk_by.op = gamex::CompareOp::DecreasedBy;
+  shrunk_by.alignment = 4;
+  auto delta3 = gamex::encode_text(gamex::ValueType::Int32,
+                                   gamex::Endian::Little, "3", nullptr);
+  expect(static_cast<bool>(delta3), "encode delta 3");
+  shrunk_by.value = *delta3;
+  const auto refined_down = scanner.refine(shrunk_by);
+  expect(refined_down.ok, refined_down.message.empty() ? "refine decreased-by"
+                                                       : refined_down.message);
+  found = false;
+  for (const auto &hit : scanner.hits()) {
+    if (hit.address == reinterpret_cast<std::uintptr_t>(slot.get())) {
+      found = true;
+    }
+  }
+  expect(found, "decreased-by filter keeps the slot");
+
   gamex::AddressEntry entry;
   entry.address = reinterpret_cast<std::uintptr_t>(slot.get());
   entry.type = gamex::ValueType::Int32;
@@ -990,6 +1011,112 @@ void test_dump_formula_empty_slot() {
   (void)dump_probe;
 }
 
+void test_dump_formula_success() {
+  auto pair = std::make_unique<std::array<std::int32_t, 2>>();
+  (*pair)[0] = 700001;
+  (*pair)[1] = 700001;
+  const auto addr_a = reinterpret_cast<std::uintptr_t>(&(*pair)[0]);
+  const auto addr_b = reinterpret_cast<std::uintptr_t>(&(*pair)[1]);
+  std::string error;
+  auto memory = gamex::ProcessMemory::open(::getpid(), &error);
+  expect(memory.has_value(),
+         error.empty() ? "open self for dump success" : error);
+  if (!memory) {
+    return;
+  }
+
+  gamex::Scanner scanner(*memory);
+  gamex::ScanQuery exact;
+  exact.type = gamex::ValueType::Int32;
+  exact.endian = gamex::Endian::Little;
+  exact.op = gamex::CompareOp::Equal;
+  exact.alignment = 4;
+  exact.writable_only = true;
+  auto prepared =
+      gamex::prepare_search_value(exact.type, exact.endian, "700001", &error);
+  expect(prepared.has_value(), "prepare dump success needle");
+  if (!prepared) {
+    return;
+  }
+  exact.value = std::move(prepared->value);
+  exact.mask = std::move(prepared->mask);
+  exact.region_start = addr_a;
+  exact.region_end = addr_b + sizeof(std::int32_t);
+  const auto scanned = scanner.scan(exact, {});
+  expect(scanned.ok && scanned.hit_count >= 2, "found both dump slots");
+
+  gamex::DumpBook book;
+  expect(book.capture_hits(0, scanner, *memory, exact.type, exact.endian, &error),
+         error.empty() ? "capture M1 both equal" : error);
+
+  (*pair)[0] = 700099; // changed; [1] stays 700001
+  expect(book.capture_hits(1, scanner, *memory, exact.type, exact.endian, &error),
+         error.empty() ? "capture M2 after change" : error);
+
+  const auto refined = book.refine_formula(
+      scanner, *memory, exact.type, exact.endian, "(M1<>M2)", &error);
+  expect(refined.ok,
+         refined.message.empty() ? "formula refine ok" : refined.message);
+  expect(refined.hit_count == 1, "formula keeps only changed address");
+  bool kept_a = false;
+  bool kept_b = false;
+  for (const auto &hit : scanner.hits()) {
+    if (hit.address == addr_a) {
+      kept_a = true;
+    }
+    if (hit.address == addr_b) {
+      kept_b = true;
+    }
+  }
+  expect(kept_a && !kept_b, "M1<>M2 keeps changed slot_a only");
+}
+
+void test_between_filter() {
+  auto slot = std::make_unique<std::int32_t>(55);
+  std::string error;
+  auto memory = gamex::ProcessMemory::open(::getpid(), &error);
+  expect(memory.has_value(), "open self for between");
+  if (!memory) {
+    return;
+  }
+  gamex::Scanner scanner(*memory);
+  gamex::ScanQuery between;
+  between.type = gamex::ValueType::Int32;
+  between.endian = gamex::Endian::Little;
+  between.op = gamex::CompareOp::Between;
+  between.alignment = 4;
+  between.writable_only = true;
+  between.region_start = reinterpret_cast<std::uintptr_t>(slot.get());
+  between.region_end = between.region_start + sizeof(std::int32_t);
+  auto low = gamex::encode_text(gamex::ValueType::Int32, gamex::Endian::Little,
+                                "50", nullptr);
+  auto high = gamex::encode_text(gamex::ValueType::Int32, gamex::Endian::Little,
+                                 "60", nullptr);
+  expect(static_cast<bool>(low) && static_cast<bool>(high), "encode between bounds");
+  between.value = *low;
+  between.upper = *high;
+  const auto status = scanner.scan(between, {});
+  expect(status.ok && status.hit_count >= 1, "between finds 55 in [50,60]");
+  bool found = false;
+  for (const auto &hit : scanner.hits()) {
+    if (hit.address == reinterpret_cast<std::uintptr_t>(slot.get())) {
+      found = true;
+    }
+  }
+  expect(found, "between keeps the slot address");
+
+  *slot = 61;
+  const auto refined = scanner.refine(between);
+  expect(refined.ok, refined.message.empty() ? "refine between" : refined.message);
+  found = false;
+  for (const auto &hit : scanner.hits()) {
+    if (hit.address == reinterpret_cast<std::uintptr_t>(slot.get())) {
+      found = true;
+    }
+  }
+  expect(!found, "between refine drops 61 outside [50,60]");
+}
+
 void test_process_starttime() {
   const auto start = gamex::process_starttime(::getpid());
   expect(start.has_value() && *start > 0, "self starttime readable");
@@ -1001,6 +1128,84 @@ void test_process_starttime() {
            error.empty() ? "probe_read self" : error);
   }
   (void)gamex::elevated_privileges();
+}
+
+void test_sequence_structure() {
+  std::string error;
+  auto tmpl = gamex::make_sequence_structure(
+      "Resources", gamex::ValueType::Int32, gamex::Endian::Little,
+      "1000 555 333 5555", &error);
+  expect(tmpl.has_value(), error.empty() ? "sequence parse" : error);
+  if (!tmpl) {
+    return;
+  }
+  expect(tmpl->fields.size() == 4, "sequence has 4 fields");
+  expect(tmpl->fields[0].offset == 0, "first offset 0");
+  expect(tmpl->fields[1].offset == 4, "second offset 4");
+  expect(tmpl->fields[2].offset == 8, "third offset 8");
+  expect(tmpl->fields[3].offset == 12, "fourth offset 12");
+  expect(tmpl->span() == 16, "sequence span 16");
+  expect(tmpl->validate(&error), error.empty() ? "validate sequence" : error);
+
+  auto too_few = gamex::make_sequence_structure(
+      "x", gamex::ValueType::Int32, gamex::Endian::Little, "1000", &error);
+  expect(!too_few.has_value(), "single value rejected");
+
+  auto bad_type = gamex::make_sequence_structure(
+      "x", gamex::ValueType::StringUtf8, gamex::Endian::Little, "a b", &error);
+  expect(!bad_type.has_value(), "string type rejected for sequence");
+
+  // Живий пошук у дочірньому процесі: чотири int32 підряд.
+  int pipes[2] = {-1, -1};
+  if (::pipe(pipes) != 0) {
+    expect(false, "pipe sequence");
+    return;
+  }
+  const pid_t pid = ::fork();
+  if (pid < 0) {
+    expect(false, "fork sequence");
+    return;
+  }
+  if (pid == 0) {
+    ::close(pipes[0]);
+    volatile std::int32_t resources[4] = {1000, 555, 333, 5555};
+    const std::uintptr_t address =
+        reinterpret_cast<std::uintptr_t>(const_cast<std::int32_t *>(resources));
+    if (::write(pipes[1], &address, sizeof(address)) ==
+        static_cast<ssize_t>(sizeof(address))) {
+      for (;;) {
+        ::pause();
+      }
+    }
+    _exit(1);
+  }
+  ::close(pipes[1]);
+  std::uintptr_t address = 0;
+  const ssize_t got = ::read(pipes[0], &address, sizeof(address));
+  ::close(pipes[0]);
+  expect(got == static_cast<ssize_t>(sizeof(address)),
+         "child published sequence address");
+
+  auto memory = gamex::ProcessMemory::open(pid, &error);
+  expect(memory.has_value(), error.empty() ? "open sequence child" : error);
+  if (memory) {
+    gamex::Scanner scanner(*memory);
+    gamex::ScanQuery region;
+    region.alignment = 4;
+    region.writable_only = true;
+    const auto status = scanner.scan_structure(*tmpl, region);
+    expect(status.ok,
+           status.message.empty() ? "sequence scan" : status.message);
+    bool found = false;
+    for (const auto &hit : scanner.hits()) {
+      if (hit.address == address) {
+        found = true;
+      }
+    }
+    expect(found, "sequence 1000 555 333 5555 found in child");
+  }
+  ::kill(pid, SIGKILL);
+  ::waitpid(pid, nullptr, 0);
 }
 
 void test_replace_hits_undo() {
@@ -1052,10 +1257,13 @@ int main() {
   test_table_roundtrip();
   test_expression_and_mask();
   test_dump_formula_empty_slot();
+  test_dump_formula_success();
+  test_between_filter();
   test_process_starttime();
   test_replace_hits_undo();
   test_module_bind_and_resolve();
   test_structure_scan_child();
+  test_sequence_structure();
   test_emulator_guest_mapping();
   test_watchpoint_child();
   test_pointer_scan_child();

@@ -69,12 +69,12 @@ HexDialog::HexDialog(ProcessMemory* memory, std::uintptr_t address, QWidget* par
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
     connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
     connect(go, &QPushButton::clicked, this, [this] {
-        const auto address = parse_addr(address_edit_->text());
-        if (!address) {
+        const auto parsed = parse_addr(address_edit_->text());
+        if (!parsed) {
             QMessageBox::warning(this, "GameX", "Некоректна адреса");
             return;
         }
-        base_ = *address & ~std::uintptr_t{0xf};
+        base_ = *parsed & ~std::uintptr_t{0xf};
         address_edit_->setText(QString("0x%1").arg(static_cast<qulonglong>(base_), 0, 16));
         reload();
     });

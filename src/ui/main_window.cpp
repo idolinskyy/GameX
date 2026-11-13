@@ -6,6 +6,7 @@
 #include "ui/process_dialog.hpp"
 #include "ui/region_dialog.hpp"
 #include "ui/scan_worker.hpp"
+#include "ui/sequence_dialog.hpp"
 #include "ui/structure_dialog.hpp"
 #include "ui/watch_dialog.hpp"
 
@@ -24,7 +25,11 @@
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QCoreApplication>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QFileDialog>
+#include <QFileInfo>
+#include <QFormLayout>
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
@@ -50,6 +55,7 @@
 #include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
+#include <QWhatsThis>
 
 #include <QBrush>
 #include <QColor>
@@ -71,6 +77,45 @@ void add_type(QComboBox *combo, const QString &label, ValueType type) {
 }
 
 } // namespace
+
+QString MainWindow::value_type_label(ValueType type) {
+  switch (type) {
+  case ValueType::Int8:
+    return QStringLiteral("Ціле 1 байт");
+  case ValueType::UInt8:
+    return QStringLiteral("Беззнакове 1 байт");
+  case ValueType::Int16:
+    return QStringLiteral("Ціле 2 байти");
+  case ValueType::UInt16:
+    return QStringLiteral("Беззнакове 2 байти");
+  case ValueType::Int24:
+    return QStringLiteral("Ціле 3 байти");
+  case ValueType::Int32:
+    return QStringLiteral("Ціле 4 байти");
+  case ValueType::UInt32:
+    return QStringLiteral("Беззнакове 4 байти");
+  case ValueType::Int64:
+    return QStringLiteral("Ціле 8 байтів");
+  case ValueType::UInt64:
+    return QStringLiteral("Беззнакове 8 байтів");
+  case ValueType::Float32:
+    return QStringLiteral("Дріб 4 байти");
+  case ValueType::Float64:
+    return QStringLiteral("Дріб 8 байтів");
+  case ValueType::StringUtf8:
+    return QStringLiteral("Рядок UTF-8");
+  case ValueType::ByteArray:
+    return QStringLiteral("Байти");
+  }
+  return QStringLiteral("Ціле 4 байти");
+}
+
+QString MainWindow::process_title(pid_t pid, const QString &name) {
+  if (!name.isEmpty()) {
+    return QString("%1 (pid %2)").arg(name).arg(static_cast<qulonglong>(pid));
+  }
+  return QString("pid %1").arg(static_cast<qulonglong>(pid));
+}
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
   build_ui();
@@ -143,15 +188,27 @@ void MainWindow::build_ui() {
       "Підключитись до вже запущеної програми. Без root на Ubuntu "
       "(ptrace_scope=1) часто блокується — тоді краще «Запустити» або "
       "«З правами root».");
+  process_button->setWhatsThis(
+      "<b>Обрати процес</b><p>Підключає GameX до гри, яка вже запущена. "
+      "На Ubuntu з ptrace_scope=1 це часто не спрацює без root — надійніше "
+      "кнопка <b>Запустити</b>. F1 → «З чого почати».</p>");
   auto *launch_button = new QPushButton("Запустити", this);
   launch_button->setToolTip(
       "Запустити гру як дочірній процес — зручний спосіб без root. "
       "На Ubuntu з ptrace_scope=1 саме так найчастіше і працює.");
+  launch_button->setWhatsThis(
+      "<b>Запустити</b><p>Відкриває гру з GameX (файл + аргументи). "
+      "Так читання пам’яті зазвичай працює без прав адміністратора. "
+      "Це рекомендований спосіб на Ubuntu.</p>");
   auto *root_button = new QPushButton("З правами root", this);
   root_button->setToolTip(
       "Відкрити ще один GameX від root (пароль у zenity → sudo). "
       "Потрібно, щоб підключатись до вже відкритих ігор при ptrace_scope=1. "
       "Не тримайте root без потреби.");
+  root_button->setWhatsThis(
+      "<b>З правами root</b><p>Окреме вікно GameX від адміністратора. "
+      "Потрібно рідко — коли треба підключити вже відкриту гру. "
+      "Не тримайте root без потреби.</p>");
   root_button->setEnabled(!elevated_privileges());
   auto *region_button = new QPushButton("Блок пам'яті", this);
   region_button->setToolTip(
@@ -177,7 +234,7 @@ void MainWindow::build_ui() {
   endian_combo_->setToolTip(
       "Порядок байтів. Для звичайних Linux-ігор залиште «молодший спочатку».");
   op_combo_ = new QComboBox(this);
-  op_combo_->setToolTip("Умова першого пошуку або відсіву");
+  op_combo_->setToolTip("Умова залежить від фази: перший пошук або відсів");
   alignment_ = new QSpinBox(this);
   alignment_->setToolTip("Крок перебору адрес. Це не значення з гри. Для "
                          "цілого 4 байти зазвичай 4.");
@@ -205,24 +262,7 @@ void MainWindow::build_ui() {
   endian_combo_->addItem("Старший байт спочатку",
                          static_cast<int>(Endian::Big));
 
-  op_combo_->addItem("Дорівнює", static_cast<int>(CompareOp::Equal));
-  op_combo_->addItem("Невідоме значення", static_cast<int>(CompareOp::Unknown));
-  op_combo_->addItem("Не дорівнює", static_cast<int>(CompareOp::NotEqual));
-  op_combo_->addItem("Більше", static_cast<int>(CompareOp::Greater));
-  op_combo_->addItem("Більше або дорівнює",
-                     static_cast<int>(CompareOp::GreaterOrEqual));
-  op_combo_->addItem("Менше", static_cast<int>(CompareOp::Less));
-  op_combo_->addItem("Менше або дорівнює",
-                     static_cast<int>(CompareOp::LessOrEqual));
-  op_combo_->addItem("Діапазон", static_cast<int>(CompareOp::Between));
-  op_combo_->addItem("Зросло", static_cast<int>(CompareOp::Increased));
-  op_combo_->addItem("Зменшилось", static_cast<int>(CompareOp::Decreased));
-  op_combo_->addItem("Зросло на…", static_cast<int>(CompareOp::IncreasedBy));
-  op_combo_->addItem("Зменшилось на…",
-                     static_cast<int>(CompareOp::DecreasedBy));
-  op_combo_->addItem("Змінилось", static_cast<int>(CompareOp::Changed));
-  op_combo_->addItem("Не змінилось", static_cast<int>(CompareOp::Unchanged));
-  op_combo_->setCurrentIndex(0);
+  refill_op_combo();
 
   alignment_->setRange(1, 4096);
   alignment_->setValue(4);
@@ -237,13 +277,23 @@ void MainWindow::build_ui() {
 
   scan_button_ = new QPushButton("Шукати", this);
   scan_button_->setToolTip("Перший прохід по пам'яті");
+  scan_button_->setWhatsThis(
+      "<b>Шукати</b><p>Перший прохід по пам’яті за числом з поля "
+      "«Що шукати». Після успіху головна дія — <b>Відсіяти</b>. "
+      "F1 → «Кейс: гроші».</p>");
   refine_button_ = new QPushButton("Відсіяти", this);
   refine_button_->setToolTip(
       "Залишити лише адреси, які відповідають новій умові");
+  refine_button_->setWhatsThis(
+      "<b>Відсіяти</b><p>Залишає лише адреси, що відповідають новій умові "
+      "після зміни значення <i>в грі</i>. Повторюйте, поки адрес мало.</p>");
   undo_refine_button_ = new QPushButton("Скасувати відсів", this);
   undo_refine_button_->setToolTip(
       "Повернути список збігів до стану перед останнім «Відсіяти» "
       "або формулою (один крок)");
+  undo_refine_button_->setWhatsThis(
+      "<b>Скасувати відсів</b><p>Повертає список збігів на один крок назад "
+      "(Ctrl+Z). Це не те саме, що «Скинути пошук».</p>");
   undo_refine_button_->setEnabled(false);
   stop_button_ = new QPushButton("Стоп", this);
   stop_button_->setEnabled(false);
@@ -251,6 +301,9 @@ void MainWindow::build_ui() {
   reset_button_->setToolTip(
       "Очистити список збігів і знімок, щоб знову натиснути «Шукати». "
       "Нижня таблиця адрес лишається.");
+  reset_button_->setWhatsThis(
+      "<b>Скинути пошук</b><p>Очищає верхній список і знімок, щоб шукати "
+      "з нуля. Нижня таблиця адрес <b>не</b> очищається.</p>");
 
   progress_ = new QProgressBar(this);
   progress_->setTextVisible(true);
@@ -259,7 +312,8 @@ void MainWindow::build_ui() {
   progress_->setFormat("Очікування");
 
   auto *process_box = new QGroupBox("1. Процес", this);
-  auto *process_row = new QHBoxLayout(process_box);
+  auto *process_layout = new QVBoxLayout(process_box);
+  auto *process_row = new QHBoxLayout();
   emulator_combo_ = new QComboBox(this);
   emulator_combo_->setToolTip("Профіль приставки: адреси в таблиці — гостьові, "
                               "база RAM шукається в maps");
@@ -271,10 +325,14 @@ void MainWindow::build_ui() {
   auto *emu_detect = new QPushButton("База RAM", this);
   emu_detect->setToolTip("Знайти блок гостьової RAM за обраним профілем");
   emulator_ram_label_ = new QLabel("RAM: —", this);
+  disconnect_button_ = new QPushButton("Від'єднати", this);
+  disconnect_button_->setToolTip("Відключитись від поточного процесу");
+  disconnect_button_->setEnabled(false);
 
   process_row->addWidget(process_button);
   process_row->addWidget(launch_button);
   process_row->addWidget(root_button);
+  process_row->addWidget(disconnect_button_);
   process_row->addWidget(region_button);
   process_row->addWidget(new QLabel("Емулятор", this));
   process_row->addWidget(emulator_combo_);
@@ -282,6 +340,23 @@ void MainWindow::build_ui() {
   process_row->addWidget(emulator_ram_label_);
   process_row->addWidget(process_label_, 1);
   process_row->addWidget(region_label_);
+  process_layout->addLayout(process_row);
+
+  process_yama_hint_ = new QLabel(process_box);
+  process_yama_hint_->setWordWrap(true);
+  process_yama_hint_->setStyleSheet("color: #a06020;");
+  const QString scope_now = QString::fromStdString(ptrace_scope());
+  if (!elevated_privileges() && scope_now == QStringLiteral("1")) {
+    process_yama_hint_->setText(
+        "Порада при ptrace_scope=1: спочатку «Запустити» гру з GameX "
+        "(надійніше). «Обрати процес» до вже відкритої гри часто не спрацює "
+        "без root.");
+    process_yama_hint_->setVisible(true);
+  } else {
+    process_yama_hint_->clear();
+    process_yama_hint_->setVisible(false);
+  }
+  process_layout->addWidget(process_yama_hint_);
 
   auto *search_box = new QGroupBox("2. Пошук у пам'яті", this);
   auto *search_layout = new QVBoxLayout(search_box);
@@ -361,7 +436,7 @@ void MainWindow::build_ui() {
   table_->setColumnCount(ColCount);
   table_->setHorizontalHeaderLabels({"Тримати", "Режим", "Група", "Опис",
                                      "Прив'язка", "Адреса", "Тип", "Мін",
-                                     "Макс", "Значення → у гру"});
+                                     "Макс", "Зараз (Enter → у гру)"});
   table_->setSelectionBehavior(QAbstractItemView::SelectRows);
   table_->setSelectionMode(QAbstractItemView::ExtendedSelection);
   table_->verticalHeader()->setVisible(false);
@@ -383,6 +458,10 @@ void MainWindow::build_ui() {
   auto *add_button = new QPushButton("Додати обране ↓", this);
   add_button->setToolTip(
       "Перенести вибрані збіги вниз, щоб редагувати і заморожувати");
+  add_button->setWhatsThis(
+      "<b>Додати обране ↓</b><p>Переносить виділені рядки з верхнього "
+      "списку в нижню таблицю — тільки там можна змінювати гру (Enter) "
+      "і вмикати «Тримати». F1 → «Два списки».</p>");
   auto *remove_button = new QPushButton("Прибрати", this);
   auto *bind_button = new QPushButton("До модуля", this);
   bind_button->setToolTip(
@@ -395,6 +474,14 @@ void MainWindow::build_ui() {
   auto *structure_button = new QPushButton("Структура…", this);
   structure_button->setToolTip(
       "Шаблон кількох полів зі зсувами; пошук одним проходом");
+  auto *sequence_button = new QPushButton("Послідовність…", this);
+  sequence_button->setToolTip(
+      "Шукати кілька чисел одного типу підряд (наприклад ресурси: "
+      "1000 555 333 5555)");
+  sequence_button->setWhatsThis(
+      "<b>Послідовність…</b><p>Шукає кілька чисел одного типу підряд "
+      "(золото, залізо, дрова…). Приклад: <code>1000 555 333 5555</code>. "
+      "F1 → «Кейс: кілька ресурсів».</p>");
   auto *watch_button = new QPushButton("Хто пише…", this);
   watch_button->setToolTip(
       "Апаратний watchpoint (ptrace). Краще для процесу, запущеного з GameX. "
@@ -440,12 +527,16 @@ void MainWindow::build_ui() {
                  "↓» переносить їх у таблицю редагування.",
                  this);
   hits_hint_->setWordWrap(true);
-  table_hint_ = new QLabel("3. Запис: «Значення → у гру» + Enter. «До модуля» "
-                           "/ «Вказівник…» — стійкість "
-                           "до ASLR. Профіль емулятора — гостьові адреси "
-                           "приставки. F5–F8 · F1 — довідка.",
-                           this);
+  table_hint_ = new QLabel(
+      "Колонка «Зараз (Enter → у гру)» показує live-значення; Enter записує "
+      "в пам'ять. «До модуля» / «Вказівник…» — стійкість до ASLR. "
+      "F5–F8 · F1 — довідка.",
+      this);
   table_hint_->setWordWrap(true);
+  table_empty_hint_ = new QLabel(
+      "Таблиця порожня. Виділіть збіги зверху → «Додати обране ↓».", this);
+  table_empty_hint_->setWordWrap(true);
+  table_empty_hint_->setStyleSheet("color: #666;");
 
   auto *top_box = new QWidget(this);
   auto *top_layout = new QVBoxLayout(top_box);
@@ -455,10 +546,10 @@ void MainWindow::build_ui() {
   top_layout->addWidget(results_);
   top_layout->addWidget(add_button);
 
-  auto *bottom_box = new QWidget(this);
+  auto *bottom_box = new QGroupBox("3. Таблиця адрес", this);
   auto *bottom_layout = new QVBoxLayout(bottom_box);
-  bottom_layout->setContentsMargins(0, 0, 0, 0);
   bottom_layout->addWidget(table_hint_);
+  bottom_layout->addWidget(table_empty_hint_);
   bottom_layout->addWidget(group_filter_);
   bottom_layout->addWidget(table_);
   auto *table_buttons = new QHBoxLayout();
@@ -501,6 +592,7 @@ void MainWindow::build_ui() {
   table_buttons->addWidget(pointer_button);
   table_buttons->addWidget(hex_button);
   table_buttons->addWidget(structure_button);
+  table_buttons->addWidget(sequence_button);
   table_buttons->addWidget(watch_button);
   table_buttons->addStretch();
   table_buttons->addWidget(save_button);
@@ -527,14 +619,17 @@ void MainWindow::build_ui() {
         "Режим root. Оберіть процес (і вже відкриті ігри теж). "
         "Не тримайте підвищені права без потреби.");
   } else {
-    statusBar()->showMessage("Спочатку оберіть процес. Потім знайдіть число → "
-                             "додайте вниз → змініть значення.");
+    statusBar()->showMessage(
+        "Краще спочатку «Запустити» гру з GameX. Потім знайдіть число → "
+        "додайте вниз → змініть значення.");
   }
 
   build_menus();
 
   connect(process_button, &QPushButton::clicked, this,
           &MainWindow::choose_process);
+  connect(disconnect_button_, &QPushButton::clicked, this,
+          &MainWindow::disconnect_process);
   connect(emu_detect, &QPushButton::clicked, this,
           &MainWindow::detect_emulator_ram);
   connect(emulator_combo_, qOverload<int>(&QComboBox::currentIndexChanged),
@@ -565,6 +660,8 @@ void MainWindow::build_ui() {
           &MainWindow::open_hex_for_selected);
   connect(structure_button, &QPushButton::clicked, this,
           &MainWindow::open_structure_dialog);
+  connect(sequence_button, &QPushButton::clicked, this,
+          &MainWindow::open_sequence_dialog);
   connect(watch_button, &QPushButton::clicked, this,
           &MainWindow::open_watch_for_selected);
   for (int i = 0; i < kDumpSlots; ++i) {
@@ -629,15 +726,16 @@ void MainWindow::build_ui() {
           [this](const QString &) { apply_group_filter(); });
   update_value_fields();
   update_dump_indicators();
+  update_table_empty_state();
   update_scan_controls();
 }
 
 void MainWindow::build_menus() {
   auto *file_menu = menuBar()->addMenu("Файл");
-  auto *save_action = file_menu->addAction("Зберегти таблицю…");
+  auto *save_action = file_menu->addAction("Зберегти .gxt");
   save_action->setShortcut(QKeySequence::Save);
   connect(save_action, &QAction::triggered, this, &MainWindow::save_table);
-  auto *load_action = file_menu->addAction("Завантажити таблицю…");
+  auto *load_action = file_menu->addAction("Завантажити .gxt");
   load_action->setShortcut(QKeySequence::Open);
   connect(load_action, &QAction::triggered, this, &MainWindow::load_table);
   file_menu->addSeparator();
@@ -654,16 +752,16 @@ void MainWindow::build_menus() {
           &MainWindow::launch_process);
   launch_history_menu_ = process_menu->addMenu("Недавні запуски");
   rebuild_launch_history_menu();
-  auto *root_action = process_menu->addAction("Перезапустити з правами root…");
+  auto *root_action = process_menu->addAction("З правами root…");
   root_action->setEnabled(!elevated_privileges());
   connect(root_action, &QAction::triggered, this, &MainWindow::restart_as_root);
   auto *region_action = process_menu->addAction("Блок пам'яті…");
   connect(region_action, &QAction::triggered, this, &MainWindow::choose_region);
-  auto *ram_action = process_menu->addAction("База RAM емулятора…");
+  auto *ram_action = process_menu->addAction("База RAM");
   connect(ram_action, &QAction::triggered, this,
           &MainWindow::detect_emulator_ram);
   process_menu->addSeparator();
-  auto *disconnect_action = process_menu->addAction("Від'єднати процес");
+  auto *disconnect_action = process_menu->addAction("Від'єднати");
   connect(disconnect_action, &QAction::triggered, this,
           &MainWindow::disconnect_process);
 
@@ -688,22 +786,22 @@ void MainWindow::build_menus() {
     connect(dump_actions_[static_cast<std::size_t>(i)], &QAction::triggered,
             this, [this, i] { capture_dump_slot(i); });
   }
-  formula_action_ = search_menu->addAction("Відсіяти за формулою…");
+  formula_action_ = search_menu->addAction("Відсіяти формулою");
   connect(formula_action_, &QAction::triggered, this,
           &MainWindow::refine_by_formula);
   search_menu->addSeparator();
-  auto *add_action = search_menu->addAction("Додати обране в таблицю");
+  auto *add_action = search_menu->addAction("Додати обране ↓");
   connect(add_action, &QAction::triggered, this, &MainWindow::add_selected_hit);
 
   auto *table_menu = menuBar()->addMenu("Таблиця");
-  auto *remove_action = table_menu->addAction("Прибрати виділене");
+  auto *remove_action = table_menu->addAction("Прибрати");
   remove_action->setShortcut(QKeySequence::Delete);
   connect(remove_action, &QAction::triggered, this,
           &MainWindow::remove_selected_entries);
-  auto *bind_action = table_menu->addAction("Прив'язати до модуля");
+  auto *bind_action = table_menu->addAction("До модуля");
   connect(bind_action, &QAction::triggered, this,
           &MainWindow::bind_selected_to_module);
-  auto *pointer_action = table_menu->addAction("Шукати вказівник…");
+  auto *pointer_action = table_menu->addAction("Вказівник…");
   connect(pointer_action, &QAction::triggered, this,
           &MainWindow::find_pointers_for_selected);
   table_menu->addSeparator();
@@ -731,6 +829,9 @@ void MainWindow::build_menus() {
   auto *structure_action = tools_menu->addAction("Пошук структури…");
   connect(structure_action, &QAction::triggered, this,
           &MainWindow::open_structure_dialog);
+  auto *sequence_action = tools_menu->addAction("Пошук послідовності…");
+  connect(sequence_action, &QAction::triggered, this,
+          &MainWindow::open_sequence_dialog);
   auto *watch_action = tools_menu->addAction("Хто пише…");
   connect(watch_action, &QAction::triggered, this,
           &MainWindow::open_watch_for_selected);
@@ -739,6 +840,11 @@ void MainWindow::build_menus() {
   auto *help_action = help_menu->addAction("Як користуватись…");
   help_action->setShortcut(QKeySequence::HelpContents);
   connect(help_action, &QAction::triggered, this, &MainWindow::open_help);
+  QAction *whats_this = QWhatsThis::createAction(this);
+  whats_this->setText("Що це?");
+  whats_this->setToolTip(
+      "Клацніть кнопку або поле — з’явиться коротке пояснення (також Shift+F1)");
+  help_menu->addAction(whats_this);
   help_menu->addSeparator();
   auto *about_action = help_menu->addAction("Про програму…");
   connect(about_action, &QAction::triggered, this, &MainWindow::open_about);
@@ -752,8 +858,7 @@ void MainWindow::choose_process() {
   if (dialog.exec() != QDialog::Accepted) {
     return;
   }
-  attach_pid(dialog.selected_pid(),
-             QString("pid %1").arg(dialog.selected_pid()));
+  attach_pid(dialog.selected_pid(), dialog.selected_title());
 }
 
 void MainWindow::restart_as_root() {
@@ -910,16 +1015,75 @@ void MainWindow::restart_as_root() {
 }
 
 void MainWindow::launch_process() {
-  bool ok = false;
-  const QString command =
-      QInputDialog::getText(this, "Запустити процес",
-                            "Команда без оболонки. GameX стане батьківським "
-                            "процесом, тож читання пам'яті дозволене.",
-                            QLineEdit::Normal, last_launch_command_, &ok);
-  if (!ok || command.trimmed().isEmpty()) {
+  QDialog dialog(this);
+  dialog.setWindowTitle("Запустити процес");
+  dialog.resize(560, 180);
+
+  auto *hint = new QLabel(
+      "Гра стане дочірнім процесом GameX — так читання пам'яті зазвичай "
+      "працює без root (ptrace_scope=1).",
+      &dialog);
+  hint->setWordWrap(true);
+
+  auto *path_edit = new QLineEdit(&dialog);
+  path_edit->setPlaceholderText("/шлях/до/гри");
+  auto *browse = new QPushButton("Огляд…", &dialog);
+  auto *args_edit = new QLineEdit(&dialog);
+  args_edit->setPlaceholderText("аргументи (необов'язково)");
+
+  const QStringList previous = QProcess::splitCommand(last_launch_command_);
+  if (!previous.isEmpty()) {
+    path_edit->setText(previous.front());
+    if (previous.size() > 1) {
+      args_edit->setText(previous.mid(1).join(QLatin1Char(' ')));
+    }
+  }
+
+  connect(browse, &QPushButton::clicked, &dialog, [path_edit, &dialog] {
+    const QString path = QFileDialog::getOpenFileName(
+        &dialog, "Обрати виконуваний файл", path_edit->text(),
+        "Усі файли (*)");
+    if (!path.isEmpty()) {
+      path_edit->setText(path);
+    }
+  });
+
+  auto *path_row = new QHBoxLayout();
+  path_row->addWidget(path_edit, 1);
+  path_row->addWidget(browse);
+
+  auto *form = new QFormLayout();
+  form->addRow("Файл:", path_row);
+  form->addRow("Аргументи:", args_edit);
+
+  auto *buttons =
+      new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel,
+                           &dialog);
+  buttons->button(QDialogButtonBox::Ok)->setText("Запустити");
+  buttons->button(QDialogButtonBox::Cancel)->setText("Скасувати");
+  connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+  connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+
+  auto *layout = new QVBoxLayout(&dialog);
+  layout->addWidget(hint);
+  layout->addLayout(form);
+  layout->addWidget(buttons);
+
+  if (dialog.exec() != QDialog::Accepted) {
     return;
   }
-  do_launch(command.trimmed());
+  const QString path = path_edit->text().trimmed();
+  if (path.isEmpty()) {
+    QMessageBox::warning(this, "GameX", "Вкажіть виконуваний файл");
+    return;
+  }
+  QString command = path;
+  const QString args = args_edit->text().trimmed();
+  if (!args.isEmpty()) {
+    command += QLatin1Char(' ');
+    command += args;
+  }
+  do_launch(command);
 }
 
 void MainWindow::do_launch(const QString &command) {
@@ -933,7 +1097,8 @@ void MainWindow::do_launch(const QString &command) {
     child_ = new QProcess(this);
     connect(child_, &QProcess::started, this, [this] {
       launched_pid_ = static_cast<pid_t>(child_->processId());
-      attach_pid(launched_pid_, child_->program());
+      const QString name = QFileInfo(child_->program()).fileName();
+      attach_pid(launched_pid_, process_title(launched_pid_, name));
     });
     connect(child_, &QProcess::errorOccurred, this,
             [this](QProcess::ProcessError error) {
@@ -1242,7 +1407,7 @@ QString MainWindow::format_hit_value(const ScanHit &hit) const {
   if (last_structure_) {
     std::vector<std::byte> bytes(hit.previous.size());
     const auto io = memory_->read(hit.address, bytes);
-    const std::byte *data =
+    const std::byte *payload =
         io.transferred == bytes.size() ? bytes.data() : hit.previous.data();
     const std::size_t available =
         io.transferred == bytes.size() ? bytes.size() : hit.previous.size();
@@ -1253,7 +1418,7 @@ QString MainWindow::format_hit_value(const ScanHit &hit) const {
       }
       const std::string text =
           decode_text(field.type, last_structure_->endian,
-                      std::span<const std::byte>(data + field.offset,
+                      std::span<const std::byte>(payload + field.offset,
                                                  fixed_width(field.type)));
       const QString name =
           field.description.empty()
@@ -1597,10 +1762,11 @@ void MainWindow::show_entries() {
       address->setToolTip("Модуль не знайдено — запис і заморозка вимкнені");
     }
     table_->setItem(row, ColAddress, address);
-    auto *type = new QTableWidgetItem(QString::fromUtf8(
-        value_type_name(entry.type).data(),
-        static_cast<int>(value_type_name(entry.type).size())));
+    auto *type = new QTableWidgetItem(value_type_label(entry.type));
     type->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+    type->setToolTip(QString::fromUtf8(value_type_name(entry.type).data(),
+                                       static_cast<int>(
+                                           value_type_name(entry.type).size())));
     table_->setItem(row, ColType, type);
     table_->setItem(
         row, ColClampMin,
@@ -1628,6 +1794,7 @@ void MainWindow::show_entries() {
   table_->blockSignals(false);
   updating_ = false;
   apply_group_filter();
+  update_table_empty_state();
 }
 
 void MainWindow::apply_group_filter() {
@@ -1736,7 +1903,7 @@ void MainWindow::remove_selected_entries() {
 }
 
 void MainWindow::save_table() {
-  QFileDialog dialog(this, "Зберегти таблицю");
+  QFileDialog dialog(this, "Зберегти .gxt");
   dialog.setAcceptMode(QFileDialog::AcceptSave);
   dialog.setNameFilter("Таблиця GameX (*.gxt)");
   dialog.setDefaultSuffix("gxt");
@@ -1760,7 +1927,7 @@ void MainWindow::save_table() {
 
 void MainWindow::load_table() {
   const QString path = QFileDialog::getOpenFileName(
-      this, "Завантажити таблицю", {}, "Таблиця GameX (*.gxt)");
+      this, "Завантажити .gxt", {}, "Таблиця GameX (*.gxt)");
   if (path.isEmpty()) {
     return;
   }
@@ -1831,7 +1998,71 @@ void MainWindow::refresh_views() {
   updating_ = false;
 }
 
+void MainWindow::refill_op_combo() {
+  if (op_combo_ == nullptr) {
+    return;
+  }
+  // Фаза відсіву: є сесія і не структура. Інакше — перший пошук.
+  const bool refine_phase = scan_session_ && !last_structure_;
+  if (op_combo_->count() > 0 && op_combo_refine_phase_ == refine_phase) {
+    return;
+  }
+
+  CompareOp previous = CompareOp::Equal;
+  if (op_combo_->currentIndex() >= 0) {
+    previous = static_cast<CompareOp>(op_combo_->currentData().toInt());
+  }
+
+  op_combo_->blockSignals(true);
+  op_combo_->clear();
+  auto add = [this](const char *label, CompareOp op) {
+    op_combo_->addItem(QString::fromUtf8(label), static_cast<int>(op));
+  };
+  if (refine_phase) {
+    add("Дорівнює", CompareOp::Equal);
+    add("Не дорівнює", CompareOp::NotEqual);
+    add("Більше", CompareOp::Greater);
+    add("Більше або дорівнює", CompareOp::GreaterOrEqual);
+    add("Менше", CompareOp::Less);
+    add("Менше або дорівнює", CompareOp::LessOrEqual);
+    add("Діапазон", CompareOp::Between);
+    add("Зросло", CompareOp::Increased);
+    add("Зменшилось", CompareOp::Decreased);
+    add("Зросло на…", CompareOp::IncreasedBy);
+    add("Зменшилось на…", CompareOp::DecreasedBy);
+    add("Змінилось", CompareOp::Changed);
+    add("Не змінилось", CompareOp::Unchanged);
+    op_combo_->setToolTip("Умова відсіву після «Шукати»");
+  } else {
+    add("Дорівнює", CompareOp::Equal);
+    add("Невідоме значення", CompareOp::Unknown);
+    add("Більше", CompareOp::Greater);
+    add("Більше або дорівнює", CompareOp::GreaterOrEqual);
+    add("Менше", CompareOp::Less);
+    add("Менше або дорівнює", CompareOp::LessOrEqual);
+    add("Діапазон", CompareOp::Between);
+    op_combo_->setToolTip(
+        "Умова першого пошуку. «Зросло / Змінилось…» з’являться після "
+        "«Шукати», для відсіву.");
+  }
+
+  int index = op_combo_->findData(static_cast<int>(previous));
+  if (index < 0) {
+    if (refine_phase && previous == CompareOp::Unknown) {
+      index = op_combo_->findData(static_cast<int>(CompareOp::Changed));
+    } else {
+      index = 0;
+    }
+  }
+  op_combo_->setCurrentIndex(index >= 0 ? index : 0);
+  op_combo_->blockSignals(false);
+  op_combo_refine_phase_ = refine_phase;
+}
+
 void MainWindow::update_value_fields() {
+  if (op_combo_ == nullptr || op_combo_->count() == 0) {
+    return;
+  }
   const auto op = static_cast<CompareOp>(op_combo_->currentData().toInt());
   const bool needs_value =
       op != CompareOp::Unknown && op != CompareOp::Increased &&
@@ -1839,7 +2070,7 @@ void MainWindow::update_value_fields() {
       op != CompareOp::Unchanged;
   value_edit_->setEnabled(needs_value);
   value_label_->setEnabled(needs_value);
-  const bool refining = can_refine_scan();
+  const bool refining = scan_session_ && !last_structure_;
   const bool delta_op =
       op == CompareOp::IncreasedBy || op == CompareOp::DecreasedBy;
   if (refining) {
@@ -1848,9 +2079,7 @@ void MainWindow::update_value_fields() {
     } else {
       value_label_->setText(needs_value ? "Нове значення" : "Умова відсіву");
     }
-    if (op == CompareOp::Unknown) {
-      value_edit_->setPlaceholderText("знімок уже є — оберіть іншу умову");
-    } else if (delta_op) {
+    if (delta_op) {
       value_edit_->setPlaceholderText("наприклад 10 — зміна рівно на 10");
     } else if (!needs_value) {
       value_edit_->setPlaceholderText(
@@ -1862,8 +2091,6 @@ void MainWindow::update_value_fields() {
     value_label_->setText("Що шукати");
     if (op == CompareOp::Unknown) {
       value_edit_->setPlaceholderText("для першого знімка число не потрібне");
-    } else if (delta_op) {
-      value_edit_->setPlaceholderText("лише для відсіву після «Шукати»");
     } else if (!needs_value) {
       value_edit_->setPlaceholderText("для цієї умови число не потрібне");
     } else {
@@ -1896,10 +2123,17 @@ void MainWindow::update_scan_controls() {
   const bool session = scan_session_active();
   const bool refine_ok = can_refine_scan();
 
+  refill_op_combo();
+
+  if (disconnect_button_ != nullptr) {
+    disconnect_button_->setEnabled(have_process && !busy);
+  }
+
   if (scan_button_ != nullptr) {
     // Під час сесії «Шукати» вимкнено — спочатку скинути, щоб не зтерти збіги.
     scan_button_->setEnabled(have_process && !busy && !session);
-    scan_button_->setText(session ? "Новий пошук" : "Шукати");
+    scan_button_->setText(session ? "Новий пошук (спочатку Скинути)"
+                                  : "Шукати");
     scan_button_->setToolTip(
         session ? "Спочатку натисніть «Скинути пошук», щоб почати з нуля"
                 : "Перший прохід по пам'яті");
@@ -1927,7 +2161,8 @@ void MainWindow::update_scan_controls() {
 
   if (scan_action_ != nullptr) {
     scan_action_->setEnabled(have_process && !busy && !session);
-    scan_action_->setText(session ? "Новий пошук" : "Шукати");
+    scan_action_->setText(session ? "Новий пошук (спочатку Скинути)"
+                                  : "Шукати");
   }
   if (refine_action_ != nullptr) {
     refine_action_->setEnabled(have_process && !busy && refine_ok);
@@ -2007,6 +2242,14 @@ void MainWindow::update_scan_controls() {
   }
 
   update_value_fields();
+}
+
+void MainWindow::update_table_empty_state() {
+  if (table_empty_hint_ == nullptr || table_ == nullptr) {
+    return;
+  }
+  const bool empty = addresses_.entries().empty();
+  table_empty_hint_->setVisible(empty);
 }
 
 void MainWindow::write_status(const QString &text) {
@@ -2484,6 +2727,13 @@ void MainWindow::open_structure_dialog() {
     QMessageBox::information(this, "GameX", "Спочатку зупиніть пошук");
     return;
   }
+  if (scan_session_) {
+    QMessageBox::information(
+        this, "GameX",
+        "Уже є активний пошук. Натисніть «Скинути пошук», щоб шукати "
+        "структуру з нуля.");
+    return;
+  }
   std::vector<AddressEntry> draft;
   for (int row : selected_entry_rows()) {
     draft.push_back(addresses_.entries()[static_cast<std::size_t>(row)]);
@@ -2509,6 +2759,56 @@ void MainWindow::open_structure_dialog() {
   last_scan_type_ =
       tmpl.fields.empty() ? ValueType::Int32 : tmpl.fields.front().type;
   last_scan_endian_ = tmpl.endian;
+  start_scan_worker(std::move(region), false, tmpl);
+}
+
+void MainWindow::open_sequence_dialog() {
+  if (!scanner_ || !memory_) {
+    QMessageBox::information(this, "GameX", "Спочатку оберіть процес");
+    return;
+  }
+  if (scanning_) {
+    QMessageBox::information(this, "GameX", "Спочатку зупиніть пошук");
+    return;
+  }
+  if (scan_session_) {
+    QMessageBox::information(
+        this, "GameX",
+        "Уже є активний пошук. Натисніть «Скинути пошук», щоб шукати "
+        "послідовність з нуля.");
+    return;
+  }
+  const auto type = static_cast<ValueType>(type_combo_->currentData().toInt());
+  const auto endian = static_cast<Endian>(endian_combo_->currentData().toInt());
+  SequenceDialog dialog(type, endian, alignment_->value(),
+                        value_edit_->text().trimmed(), this);
+  if (dialog.exec() != QDialog::Accepted) {
+    return;
+  }
+  ScanQuery region;
+  region.alignment = dialog.alignment();
+  region.writable_only = writable_only_->isChecked();
+  const int mib = max_region_mib_->value();
+  region.max_region_bytes =
+      mib <= 0 ? 0 : static_cast<std::uint64_t>(mib) * 1024ull * 1024ull;
+  if (limit_region_) {
+    region.region_start = region_start_;
+    region.region_end = region_end_;
+  }
+  region.skip_path = executable_path(static_cast<pid_t>(::getpid()));
+
+  const StructureTemplate tmpl = dialog.structure();
+  last_structure_ = tmpl;
+  last_scan_type_ =
+      tmpl.fields.empty() ? ValueType::Int32 : tmpl.fields.front().type;
+  last_scan_endian_ = tmpl.endian;
+  // Підставити тип/endian у головну панель — як у знайденій послідовності.
+  const int type_index =
+      type_combo_->findData(static_cast<int>(last_scan_type_));
+  if (type_index >= 0) {
+    type_combo_->setCurrentIndex(type_index);
+  }
+  endian_combo_->setCurrentIndex(last_scan_endian_ == Endian::Big ? 1 : 0);
   start_scan_worker(std::move(region), false, tmpl);
 }
 
@@ -2602,7 +2902,7 @@ void MainWindow::refine_by_formula() {
 }
 
 void MainWindow::open_dump_help() {
-  HelpDialog dialog(QStringLiteral("Формули M1–M4"), this);
+  HelpDialog dialog(QStringLiteral("Знімки M1–M4"), this);
   dialog.exec();
 }
 

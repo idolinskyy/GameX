@@ -55,6 +55,18 @@ ProcessDialog::ProcessDialog(QWidget *parent) : QDialog(parent) {
   note->setWordWrap(true);
   note->setStyleSheet("color: #888;");
 
+  QLabel *yama_hint = nullptr;
+  const QString scope = QString::fromStdString(ptrace_scope());
+  if (scope == QStringLiteral("1") && ::geteuid() != 0) {
+    yama_hint = new QLabel(
+        "ptrace_scope=1: підключення до вже відкритої гри часто блокується. "
+        "Надійніше закрийте цей діалог і натисніть «Запустити», "
+        "або відкрийте GameX «З правами root».",
+        this);
+    yama_hint->setWordWrap(true);
+    yama_hint->setStyleSheet("color: #a06020;");
+  }
+
   empty_hint_ = new QLabel(this);
   empty_hint_->setWordWrap(true);
   empty_hint_->setStyleSheet("color: #a06020;");
@@ -78,6 +90,12 @@ ProcessDialog::ProcessDialog(QWidget *parent) : QDialog(parent) {
 
   auto *buttons = new QDialogButtonBox(
       QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
+  if (auto *ok = buttons->button(QDialogButtonBox::Ok)) {
+    ok->setText("Підключити");
+  }
+  if (auto *cancel = buttons->button(QDialogButtonBox::Cancel)) {
+    cancel->setText("Скасувати");
+  }
   auto *refresh = buttons->addButton("Оновити", QDialogButtonBox::ActionRole);
   connect(refresh, &QPushButton::clicked, this, &ProcessDialog::reload);
   connect(buttons, &QDialogButtonBox::accepted, this,
@@ -97,6 +115,9 @@ ProcessDialog::ProcessDialog(QWidget *parent) : QDialog(parent) {
           [this](bool) { apply_filter(); });
 
   auto *layout = new QVBoxLayout(this);
+  if (yama_hint != nullptr) {
+    layout->addWidget(yama_hint);
+  }
   layout->addWidget(filter_);
   layout->addWidget(login_users_only_);
   layout->addWidget(my_uid_only_);
@@ -246,6 +267,15 @@ void ProcessDialog::accept_selection() {
   }
   selected_pid_ =
       static_cast<pid_t>(table_->item(row, 0)->data(Qt::UserRole).toLongLong());
+  const QString name =
+      table_->item(row, 3) != nullptr ? table_->item(row, 3)->text() : QString();
+  if (!name.isEmpty()) {
+    selected_title_ =
+        QString("%1 (pid %2)").arg(name).arg(static_cast<qulonglong>(selected_pid_));
+  } else {
+    selected_title_ =
+        QString("pid %1").arg(static_cast<qulonglong>(selected_pid_));
+  }
   accept();
 }
 

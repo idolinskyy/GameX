@@ -109,10 +109,14 @@ private:
   void apply_group_filter();
   void copy_selected_hit_addresses();
   void update_value_fields();
+  void refill_op_combo();
   void update_dump_indicators();
   void update_scan_controls();
+  void update_table_empty_state();
   bool scan_session_active() const;
   bool can_refine_scan() const;
+  static QString value_type_label(ValueType type);
+  static QString process_title(pid_t pid, const QString &name);
   void write_status(const QString &text);
   void note_value_written(const QString &detail);
   void toggle_freeze_selected();
@@ -123,6 +127,7 @@ private:
   void find_pointers_for_selected();
   void open_hex_for_selected();
   void open_structure_dialog();
+  void open_sequence_dialog();
   void open_watch_for_selected();
   void capture_dump_slot(int slot);
   void refine_by_formula();
@@ -157,9 +162,12 @@ private:
   QWidget *search_advanced_ = nullptr;
   QGroupBox *dump_box_ = nullptr;
   QLabel *process_label_ = nullptr;
+  QLabel *process_yama_hint_ = nullptr;
   QLabel *region_label_ = nullptr;
   QLabel *hits_hint_ = nullptr;
   QLabel *table_hint_ = nullptr;
+  QLabel *table_empty_hint_ = nullptr;
+  QPushButton *disconnect_button_ = nullptr;
   QLineEdit *hits_filter_ = nullptr;
   QLineEdit *group_filter_ = nullptr;
   QComboBox *formula_preset_ = nullptr;
@@ -212,6 +220,8 @@ private:
   bool ignore_child_errors_ = false;
   // Є активна сесія пошуку (збіги / знімок / структура) — до «Скинути».
   bool scan_session_ = false;
+  // Яку фазу зараз показує op_combo_ (false = перший пошук).
+  bool op_combo_refine_phase_ = false;
 };
 
 } // namespace gamex

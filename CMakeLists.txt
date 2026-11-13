@@ -115,10 +115,14 @@ if(GAMEX_BUILD_UI)
             src/ui/hex_dialog.cpp
             src/ui/structure_dialog.hpp
             src/ui/structure_dialog.cpp
+            src/ui/sequence_dialog.hpp
+            src/ui/sequence_dialog.cpp
             src/ui/watch_dialog.hpp
             src/ui/watch_dialog.cpp
             src/ui/help_dialog.hpp
             src/ui/help_dialog.cpp
+            src/ui/help_content.hpp
+            src/ui/help_content.cpp
             src/ui/scan_worker.hpp
             src/ui/scan_worker.cpp
             resources/gamex.qrc
@@ -147,14 +151,11 @@ if(GAMEX_BUILD_UI)
             src/ui/main_window.cpp
             PROPERTIES OBJECT_DEPENDS "${GAMEX_BUILD_INFO_HEADER}")
 
-        # Qt з ~/Qt/… (не з /usr): прописуємо RPATH на його lib/,
-        # інакше після install підвантажиться системний Qt і буде
-        # «version Qt_6.xx not found».
+        # Qt з ~/Qt/… (не з /usr): RPATH на lib/ лише для локальної збірки
+        # (./build/gamex). У install/пакетах — бандл + $ORIGIN (див. нижче).
         if(GAMEX_QT_ROOT AND EXISTS "${GAMEX_QT_ROOT}/lib")
             set_target_properties(gamex PROPERTIES
-                BUILD_RPATH "${GAMEX_QT_ROOT}/lib"
-                INSTALL_RPATH "${GAMEX_QT_ROOT}/lib"
-                INSTALL_RPATH_USE_LINK_PATH TRUE)
+                BUILD_RPATH "${GAMEX_QT_ROOT}/lib")
         endif()
 
         include(GNUInstallDirs)
@@ -163,8 +164,49 @@ if(GAMEX_BUILD_UI)
             "${CMAKE_CURRENT_BINARY_DIR}/gamex.desktop"
             @ONLY)
 
-        install(TARGETS gamex
-            RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+        set(GAMEX_BUNDLE_QT OFF)
+        set(GAMEX_QT_PREFIX "")
+        if(UNIX AND NOT APPLE AND DEFINED Qt6_DIR)
+            get_filename_component(GAMEX_QT_PREFIX "${Qt6_DIR}/../../.." ABSOLUTE)
+            if(NOT GAMEX_QT_PREFIX MATCHES "^/usr(/|$)")
+                set(GAMEX_BUNDLE_QT ON)
+                set(GAMEX_BUNDLE_LIBDIR "${CMAKE_INSTALL_LIBDIR}/gamex")
+            endif()
+        elseif(GAMEX_QT_ROOT AND EXISTS "${GAMEX_QT_ROOT}/lib"
+               AND NOT GAMEX_QT_ROOT MATCHES "^/usr(/|$)")
+            set(GAMEX_BUNDLE_QT ON)
+            set(GAMEX_QT_PREFIX "${GAMEX_QT_ROOT}")
+            set(GAMEX_BUNDLE_LIBDIR "${CMAKE_INSTALL_LIBDIR}/gamex")
+        endif()
+
+        if(GAMEX_BUNDLE_QT)
+            set_target_properties(gamex PROPERTIES
+                INSTALL_RPATH "$ORIGIN"
+                INSTALL_RPATH_USE_LINK_PATH FALSE)
+            install(TARGETS gamex
+                RUNTIME DESTINATION ${GAMEX_BUNDLE_LIBDIR})
+            configure_file(
+                "${CMAKE_CURRENT_SOURCE_DIR}/packaging/gamex-wrapper.sh.in"
+                "${CMAKE_CURRENT_BINARY_DIR}/gamex-wrapper.sh"
+                @ONLY
+                NEWLINE_STYLE UNIX)
+            install(PROGRAMS "${CMAKE_CURRENT_BINARY_DIR}/gamex-wrapper.sh"
+                DESTINATION ${CMAKE_INSTALL_BINDIR}
+                RENAME gamex)
+            install(CODE "
+                set(GAMEX_QT_PREFIX \"${GAMEX_QT_PREFIX}\")
+                set(GAMEX_BUNDLE_LIBDIR \"${GAMEX_BUNDLE_LIBDIR}\")
+                include(\"${CMAKE_CURRENT_SOURCE_DIR}/cmake/InstallBundledQt.cmake\")
+            ")
+        else()
+            if(GAMEX_QT_ROOT AND EXISTS "${GAMEX_QT_ROOT}/lib")
+                set_target_properties(gamex PROPERTIES
+                    INSTALL_RPATH "${GAMEX_QT_ROOT}/lib")
+            endif()
+            install(TARGETS gamex
+                RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+        endif()
+
         install(FILES "${CMAKE_CURRENT_BINARY_DIR}/gamex.desktop"
             DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/applications)
         install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/data/icons/gamex.svg"
@@ -182,6 +224,31 @@ if(GAMEX_BUILD_UI)
             "${CMAKE_CURRENT_SOURCE_DIR}/README.md"
             "${CMAKE_CURRENT_SOURCE_DIR}/CONTRIBUTING.md"
             DESTINATION ${CMAKE_INSTALL_DOCDIR})
+
+        set(CPACK_PACKAGE_NAME "gamex")
+        set(CPACK_PACKAGE_VENDOR "GameX")
+        set(CPACK_PACKAGE_CONTACT "Ihor Dolinskyi")
+        set(CPACK_PACKAGE_DESCRIPTION_SUMMARY
+            "Linux memory editor for local single-player games")
+        set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
+        set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
+        set(CPACK_RESOURCE_FILE_README "${CMAKE_CURRENT_SOURCE_DIR}/README.md")
+        set(CPACK_STRIP_FILES TRUE)
+        if(UNIX AND NOT APPLE)
+            set(CPACK_GENERATOR "DEB;TGZ")
+            set(CPACK_DEBIAN_PACKAGE_MAINTAINER "Ihor Dolinskyi")
+            set(CPACK_DEBIAN_PACKAGE_SECTION "utils")
+            set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
+            if(GAMEX_BUNDLE_QT)
+                # Не тягнути системний libqt6*: у пакеті свій Qt з префікса збірки.
+                set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS OFF)
+                set(CPACK_DEBIAN_PACKAGE_DEPENDS
+                    "libc6, libstdc++6, libgcc-s1, libgl1, libopengl0, libegl1, libx11-6, libx11-xcb1, libxcb1, libxkbcommon0, libxkbcommon-x11-0, libxcb-cursor0, libxcb-icccm4, libxcb-image0, libxcb-keysyms1, libxcb-randr0, libxcb-render0, libxcb-render-util0, libxcb-shape0, libxcb-shm0, libxcb-sync1, libxcb-xfixes0, libxcb-xkb1, libxcb-util1, libfontconfig1, libfreetype6, libpng16-16 | libpng16-16t64, zlib1g, libglib2.0-0 | libglib2.0-0t64, libdbus-1-3, libzstd1, libssl3")
+            else()
+                set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
+            endif()
+        endif()
+        include(CPack)
     else()
         message(WARNING
             "Qt Widgets dev files were not found. Built gamex_core only. "

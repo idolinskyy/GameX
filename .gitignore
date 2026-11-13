@@ -1,8 +1,18 @@
-build/
-cmake/build_number
+# Збірки (build, build-package, cmake-build-*, …)
+build*/
 cmake-build-*/
 out/
+
+# Артефакти релізу (./scripts/package.sh → dist/)
+dist/
+*.AppImage
+
+# Лічильник збірки (локальний, не в git)
+cmake/build_number
+
 .cache/
+.claude/
+.cursor/
 /compile_commands.json
 compile_commands.json
 CMakeUserPresets.json

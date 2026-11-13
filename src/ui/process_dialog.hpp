@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QDialog>
+#include <QString>
 
 #include <sys/types.h>
 #include <unordered_set>
@@ -23,6 +24,7 @@ public:
   ~ProcessDialog() override;
 
   pid_t selected_pid() const { return selected_pid_; }
+  QString selected_title() const { return selected_title_; }
 
 private:
   void reload();
@@ -40,6 +42,7 @@ private:
   std::vector<ProcessInfo> processes_;
   std::unordered_set<pid_t> panel_pids_;
   pid_t selected_pid_ = -1;
+  QString selected_title_;
 };
 
 } // namespace gamex

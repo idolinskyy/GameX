@@ -1,0 +1,9 @@
+#!/bin/sh
+# Обгортка: бінарник і Qt з префікса збірки, не системний libQt6*.so з /usr.
+set -eu
+bindir="$(dirname "$(readlink -f "$0")")"
+libdir="$(readlink -f "$bindir/../@GAMEX_BUNDLE_LIBDIR@")"
+export LD_LIBRARY_PATH="$libdir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export QT_PLUGIN_PATH="$libdir/plugins"
+export QT_QPA_PLATFORM_PLUGIN_PATH="$libdir/plugins/platforms"
+exec "$libdir/gamex" "$@"
